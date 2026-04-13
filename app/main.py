@@ -2778,9 +2778,12 @@ def _job_to_api_format(
     skips the lookup entirely for hot paths (e.g. the admin dashboard)
     where the caller doesn't need the resolved article link.
     """
-    wiki_slug: str | None = None
-    wiki_kb: str | None = None
-    if resolve_slug and job.get("added_to_wiki"):
+    wiki_slug: str | None = job.get("wiki_slug") or None
+    wiki_kb: str | None = job.get("wiki_kb") or None
+    # Fall back to fuzzy reconstruction only for legacy rows that were
+    # written before we started persisting the resolved slug (pre-fix
+    # jobs set added_to_wiki=1 without recording which slug won).
+    if resolve_slug and job.get("added_to_wiki") and not wiki_slug:
         wiki_slug, wiki_kb = _find_article_slug(job["topic"], slug_index=slug_index)
 
     return {
@@ -2809,7 +2812,18 @@ def _find_article_slug(
     ``slug_index`` from ``_build_slug_index()`` so the full-KB scan only
     happens once per request.
     """
-    safe = "".join(c if c.isalnum() or c in " -" else "_" for c in topic)[:80]
+    # Strip the synthetic prefixes that local/YouTube pipelines stick
+    # on the topic field — otherwise "local:my auth flow" derives the
+    # bogus candidate "local_my-auth-flow" which never matches what
+    # create_article actually wrote (slug comes from the content's
+    # first heading, not this prefixed string).
+    clean_topic = topic
+    for prefix in ("local:", "youtube:", "YouTube:"):
+        if clean_topic.lower().startswith(prefix.lower()):
+            clean_topic = clean_topic[len(prefix):].strip()
+            break
+
+    safe = "".join(c if c.isalnum() or c in " -" else "_" for c in clean_topic)[:80]
     candidate = safe.lower().replace(" ", "-").strip("-")
     if not candidate:
         return None, None

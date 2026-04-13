@@ -99,7 +99,13 @@ async def research_task(ctx: dict, topic: str, job_id: int, kb_name: str = "pers
     if content:
         try:
             slug, change_type = await create_or_update_article(kb_name, topic, content, source_type="web")
-            await db.update_job(job_id, added_to_wiki=1)
+            # Persist slug/kb so the admin UI's "view →" link resolves
+            # deterministically; the fuzzy _find_article_slug fallback
+            # mis-resolves prefixed topics (local:/YouTube:) and drifts
+            # whenever extract_title picks a different heading.
+            await db.update_job(
+                job_id, added_to_wiki=1, wiki_slug=slug, wiki_kb=kb_name,
+            )
             await db.log_article_update(
                 article_slug=slug,
                 kb_name=kb_name,
@@ -213,7 +219,9 @@ async def research_synthesize_task(ctx: dict, topic: str, job_id: int, kb_name: 
     if content:
         try:
             slug, change_type = await create_or_update_article(kb_name, topic, content, source_type="web")
-            await db.update_job(job_id, added_to_wiki=1)
+            await db.update_job(
+                job_id, added_to_wiki=1, wiki_slug=slug, wiki_kb=kb_name,
+            )
             await db.log_article_update(
                 article_slug=slug, kb_name=kb_name,
                 job_id=job_id, change_type=change_type,
@@ -256,7 +264,9 @@ async def local_research_task(
     if content:
         try:
             slug, change_type = await create_or_update_article("personal", topic, content, source_type="local")
-            await db.update_job(job_id, added_to_wiki=1)
+            await db.update_job(
+                job_id, added_to_wiki=1, wiki_slug=slug, wiki_kb="personal",
+            )
             await db.log_article_update(
                 article_slug=slug, kb_name="personal",
                 job_id=job_id, change_type=change_type,
@@ -446,7 +456,9 @@ async def local_research_cron_task(ctx: dict) -> dict:
             job = await db.get_job(job_id)
             if job and job.get("content"):
                 slug, change_type = await create_or_update_article("personal", topic, job["content"], source_type="local")
-                await db.update_job(job_id, added_to_wiki=1)
+                await db.update_job(
+                    job_id, added_to_wiki=1, wiki_slug=slug, wiki_kb="personal",
+                )
                 results.append({"topic": topic, "status": "complete", "slug": slug})
             else:
                 results.append({"topic": topic, "status": job["status"] if job else "unknown"})
@@ -546,7 +558,9 @@ async def github_releases_task(ctx: dict) -> dict:
                 job = await db.get_job(job_id)
                 if job and job.get("content"):
                     slug, change_type = await create_or_update_article("personal", topic, job["content"])
-                    await db.update_job(job_id, added_to_wiki=1)
+                    await db.update_job(
+                        job_id, added_to_wiki=1, wiki_slug=slug, wiki_kb="personal",
+                    )
                     researched.append({"repo": rel["repo"], "tag": rel["tag"], "slug": slug})
             except Exception as exc:
                 logger.warning("Release research failed for %s: %s", rel["repo"], exc)
