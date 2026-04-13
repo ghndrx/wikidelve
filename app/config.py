@@ -213,6 +213,14 @@ RESEARCH_MAX_RETRIES = 3
 RESEARCH_RETRY_DELAY = 15  # seconds (faster retry)
 MINIMAX_TIMEOUT = 300  # seconds (5 min — Minimax M2.7 can be slow)
 
+# Transient-error retry for the llm_chat path. When N workers hit the
+# same provider concurrently (e.g. Bedrock on-demand) we see 429/503
+# bursts; a single attempt fails a whole job. Retries are capped and
+# use exponential backoff with jitter, plus Retry-After honour.
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "4"))
+LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
+LLM_RETRY_MAX_DELAY = float(os.getenv("LLM_RETRY_MAX_DELAY", "30.0"))
+
 # --- Auto-discovery ---------------------------------------------------------
 # Global kill switch. Per-KB settings (enabled flag, budget, strategy, seed
 # topics, etc.) live in the auto_discovery_config table so they can be

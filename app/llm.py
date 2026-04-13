@@ -36,6 +36,10 @@ from app.config import (
     AWS_ACCESS_KEY_ID,
     AWS_SECRET_ACCESS_KEY,
     AWS_SESSION_TOKEN,
+    # Retry
+    LLM_MAX_RETRIES,
+    LLM_RETRY_BASE_DELAY,
+    LLM_RETRY_MAX_DELAY,
 )
 
 logger = logging.getLogger("kb-service.llm")
@@ -85,6 +89,108 @@ def _resolve_provider_model(
     return active_provider, active_model
 
 
+# Transient status codes we should retry on. 408 = Request Timeout,
+# 425 = Too Early (rare but transient), 429 = Too Many Requests,
+# 500/502/503/504 = upstream/overload.
+_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+# Bedrock/boto3 error codes that are transient. Anything else (access
+# denied, validation, etc.) is a permanent failure — retrying wastes
+# tokens and masks real bugs.
+_RETRYABLE_BEDROCK_CODES = frozenset({
+    "ThrottlingException",
+    "TooManyRequestsException",
+    "ServiceUnavailableException",
+    "ServiceUnavailable",
+    "ModelTimeoutException",
+    "ModelErrorException",
+    "ModelNotReadyException",
+    "InternalServerException",
+    "RequestTimeout",
+    "RequestTimeoutException",
+})
+
+
+def _is_retryable(exc: BaseException) -> tuple[bool, float | None]:
+    """Classify an exception as transient-retryable. Returns (retry?, server_hint_seconds).
+
+    The hint is a ``Retry-After`` value in seconds, if the server sent
+    one — callers use it to override the computed backoff.
+    """
+    # httpx timeouts + network-layer errors
+    if isinstance(exc, (
+        httpx.TimeoutException,
+        httpx.ConnectError,
+        httpx.ReadError,
+        httpx.WriteError,
+        httpx.RemoteProtocolError,
+    )):
+        return True, None
+
+    # httpx HTTP status errors — retry only on transient codes
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in _RETRYABLE_STATUS:
+            hint = None
+            retry_after = exc.response.headers.get("retry-after")
+            if retry_after:
+                try:
+                    hint = float(retry_after)
+                except ValueError:
+                    hint = None
+            return True, hint
+        return False, None
+
+    # boto3/botocore errors from the Bedrock SigV4 path
+    try:
+        from botocore.exceptions import ClientError, EndpointConnectionError, ReadTimeoutError, ConnectTimeoutError
+    except ImportError:  # botocore not installed; Bedrock SigV4 unused
+        ClientError = EndpointConnectionError = ReadTimeoutError = ConnectTimeoutError = ()  # type: ignore
+
+    if isinstance(exc, (EndpointConnectionError, ReadTimeoutError, ConnectTimeoutError)):
+        return True, None
+
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code", "")
+        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
+        if code in _RETRYABLE_BEDROCK_CODES or status in _RETRYABLE_STATUS:
+            return True, None
+        return False, None
+
+    return False, None
+
+
+async def _with_retry(coro_factory, *, label: str) -> str:
+    """Invoke ``await coro_factory()`` with exponential backoff on transient errors.
+
+    ``coro_factory`` must be a zero-arg callable returning a fresh
+    coroutine each call — we re-invoke it on every retry.
+    """
+    import asyncio
+    import random
+
+    attempt = 0
+    while True:
+        try:
+            return await coro_factory()
+        except BaseException as exc:
+            retry, hint = _is_retryable(exc)
+            if not retry or attempt >= LLM_MAX_RETRIES:
+                raise
+            # Exponential backoff with full jitter, capped.
+            backoff = min(LLM_RETRY_MAX_DELAY, LLM_RETRY_BASE_DELAY * (2 ** attempt))
+            delay = hint if hint is not None else backoff * (0.5 + random.random() * 0.5)
+            delay = min(delay, LLM_RETRY_MAX_DELAY)
+            logger.warning(
+                "%s transient error (attempt %d/%d): %s — retrying in %.1fs",
+                label, attempt + 1, LLM_MAX_RETRIES + 1,
+                type(exc).__name__ + (f": {exc}" if str(exc) else ""),
+                delay,
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
+
+
 async def llm_chat(
     system_msg: str,
     user_msg: str,
@@ -102,23 +208,31 @@ async def llm_chat(
     Optional *model* / *provider* kwargs override the global defaults for
     this single call (used by per-KB synthesis settings and chat retrieval).
     All output is sanitized to remove non-Latin script artifacts.
+
+    Transient provider errors (429/503/504, timeouts, Bedrock
+    throttling) are retried with exponential backoff + jitter, capped
+    by ``LLM_MAX_RETRIES`` / ``LLM_RETRY_MAX_DELAY``. Permanent errors
+    (4xx other than the transient set, validation, auth) propagate
+    immediately so bugs stay loud.
     """
     active_provider, active_model = _resolve_provider_model(provider, model)
-    if active_provider == "bedrock":
-        result = await _bedrock_chat(
-            system_msg, user_msg, max_tokens, temperature, model=active_model,
-        )
-    elif active_provider == "kimi":
-        result = await _kimi_chat(
-            system_msg, user_msg, max_tokens, temperature,
-            client=client, model=active_model,
-        )
-    else:
-        result = await _minimax_chat(
+
+    def _factory():
+        if active_provider == "bedrock":
+            return _bedrock_chat(
+                system_msg, user_msg, max_tokens, temperature, model=active_model,
+            )
+        if active_provider == "kimi":
+            return _kimi_chat(
+                system_msg, user_msg, max_tokens, temperature,
+                client=client, model=active_model,
+            )
+        return _minimax_chat(
             system_msg, user_msg, max_tokens, temperature,
             client=client, model=active_model,
         )
 
+    result = await _with_retry(_factory, label=f"llm_chat[{active_provider}]")
     return _strip_non_latin(result)
 
 
