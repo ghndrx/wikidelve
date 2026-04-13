@@ -1,0 +1,22 @@
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+# Upgrade pip first — see Dockerfile comment re CVE-2025-8869 / CVE-2026-1703.
+RUN pip install --no-cache-dir --upgrade 'pip>=26.0' 'setuptools>=78'
+
+COPY requirements-worker.txt /build/requirements-worker.txt
+
+RUN pip install --no-cache-dir --prefix=/install -r /build/requirements-worker.txt
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir --upgrade 'pip>=26.0' 'setuptools>=78'
+
+COPY --from=builder /install /usr/local
+
+COPY app/ /app/app/
+
+CMD ["arq", "app.worker.WorkerSettings"]

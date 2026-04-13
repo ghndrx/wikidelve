@@ -1,0 +1,54 @@
+[project]
+name = "wikidelve"
+version = "2.0.0"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-m 'not heavy'"
+markers = [
+    "e2e: end-to-end tests requiring a running server",
+    "heavy: tests that enqueue expensive background work (opt-in with -m heavy)",
+    "parity: parameterized backend parity tests (local + AWS via moto)",
+    "bench: latency benchmarks — run via `make bench`, not the default suite",
+]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+parallel = true
+omit = [
+    "*/site-packages/*",
+    "*/.venv/*",
+    "tests/*",
+]
+
+[tool.coverage.report]
+# Ratcheted upward automatically by scripts/ratchet_coverage.py after
+# each phase ships. Never lowered by hand.
+# Starting baseline: 45 (measured 46.8% on 2026-04-12, P0 ship).
+# Target: 95 after all phases land.
+fail_under = 90
+show_missing = true
+skip_covered = false
+precision = 1
+exclude_lines = [
+    # Standard pragma
+    "pragma: no cover",
+    # Defensive raises we don't want to force-fire from tests
+    "raise NotImplementedError",
+    "raise AssertionError",
+    # Debug helpers + CLI bootstrap
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    # Abstract methods
+    "\\.\\.\\.",
+    "pass",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"

@@ -1,0 +1,213 @@
+"""
+WikiDelve agent tools — wraps existing WikiDelve functions as LangChain tools
+for use with DeepAgents.
+
+Each tool calls WikiDelve's internal functions directly (no HTTP round-trips).
+"""
+
+import json
+import logging
+
+import httpx
+from langchain_core.tools import tool
+
+logger = logging.getLogger("kb-service.agent.tools")
+
+
+# ---------------------------------------------------------------------------
+# Search tools
+# ---------------------------------------------------------------------------
+
+@tool
+async def search_web(query: str, num_results: int = 8) -> str:
+    """Search the web for information on a topic using Google (via Serper API).
+    Returns ranked results with titles, URLs, and snippets.
+    Use this to gather information from the internet."""
+    from app.sources.serper import SerperProvider
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        provider = SerperProvider(client)
+        results = await provider.search(query, num=num_results)
+
+    if not results:
+        return "No search results found. Try a different query or check that SERPER_API_KEY is set."
+    return json.dumps(results, indent=2)
+
+
+@tool
+async def search_kb(query: str, kb: str = "personal", limit: int = 10) -> str:
+    """Search the WikiDelve knowledge base for existing articles matching a query.
+    Uses hybrid search (full-text + vector + knowledge graph).
+    Use this to check what's already in the wiki before researching."""
+    from app.hybrid_search import hybrid_search
+
+    results = await hybrid_search(query, kb_name=kb, limit=limit)
+    if not results:
+        return "No matching articles found in the knowledge base."
+    # Ensure results are serializable
+    safe = []
+    for r in results[:limit]:
+        if isinstance(r, dict):
+            safe.append(r)
+        else:
+            safe.append({"result": str(r)})
+    return json.dumps(safe, indent=2, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Web reading tools
+# ---------------------------------------------------------------------------
+
+@tool
+async def read_webpage(url: str) -> str:
+    """Read and extract the full text content from a webpage URL.
+    Use this to get detailed information from a specific source.
+    Returns the extracted text content (up to 8000 chars)."""
+    from app.browser import read_page_smart
+
+    text = await read_page_smart(url)
+    if not text:
+        return f"Failed to read content from {url}"
+    if not isinstance(text, str):
+        text = str(text)
+    return text[:8000]
+
+
+# ---------------------------------------------------------------------------
+# Article tools
+# ---------------------------------------------------------------------------
+
+@tool
+def get_article(kb: str, slug: str) -> str:
+    """Get the full content of an existing WikiDelve article by its KB name and slug.
+    Returns the article metadata and raw markdown content."""
+    from app.wiki import get_article as _get
+
+    article = _get(kb, slug)
+    if not article:
+        return f"Article not found: {kb}/{slug}"
+    return json.dumps({
+        "slug": article.get("slug"),
+        "title": article.get("title"),
+        "summary": article.get("summary"),
+        "tags": article.get("tags", []),
+        "word_count": article.get("word_count", 0),
+        "raw_markdown": article.get("raw_markdown", ""),
+    }, indent=2, default=str)
+
+
+@tool
+def list_articles(kb: str = "personal") -> str:
+    """List all articles in a knowledge base with their titles and word counts.
+    Use this to understand what's already covered in the KB."""
+    from app.wiki import get_articles
+
+    articles = get_articles(kb)
+    summary = [
+        {"slug": a.get("slug"), "title": a.get("title", ""), "words": a.get("word_count", 0)}
+        for a in articles
+    ]
+    return json.dumps(summary, indent=2)
+
+
+@tool
+async def write_article(kb: str, topic: str, content: str, source_type: str = "research") -> str:
+    """Write or update a wiki article. The content should be full markdown with YAML frontmatter.
+    If a related article exists, it will be updated; otherwise a new one is created.
+
+    The content MUST start with YAML frontmatter:
+    ---
+    title: Article Title
+    tags: [tag1, tag2]
+    summary: Brief summary
+    source_type: research
+    ---
+
+    Followed by the article body in markdown."""
+    from app.wiki import create_or_update_article
+
+    slug, change_type = await create_or_update_article(kb, topic, content, source_type=source_type)
+    return json.dumps({"slug": slug, "kb": kb, "change_type": change_type, "topic": topic})
+
+
+# ---------------------------------------------------------------------------
+# Quality tools
+# ---------------------------------------------------------------------------
+
+@tool
+async def check_article_quality(kb: str, slug: str) -> str:
+    """Check the quality score of an article (0-100).
+    Returns a score breakdown with suggestions for improvement.
+    Use this after writing an article to verify quality."""
+    from app.quality import score_article_quality
+
+    result = await score_article_quality(kb, slug)
+    if not result:
+        return f"Could not score article: {kb}/{slug}"
+    return json.dumps(result, indent=2, default=str)
+
+
+@tool
+async def enrich_article(kb: str, slug: str) -> str:
+    """Improve a shallow article by expanding its content with additional detail and structure.
+    Use this when an article's quality score is below 60."""
+    from app.quality import enrich_article as _enrich
+
+    result = await _enrich(kb, slug)
+    return json.dumps(result, indent=2, default=str)
+
+
+@tool
+async def add_crosslinks(kb: str, slug: str) -> str:
+    """Add [[Wikilinks]] to related articles within the article content.
+    Use this after writing an article to connect it to the rest of the KB."""
+    from app.quality import crosslink_article
+
+    result = await crosslink_article(kb, slug)
+    return json.dumps(result, indent=2, default=str)
+
+
+@tool
+async def fact_check_article(kb: str, slug: str) -> str:
+    """Run fact-checking on an article. Extracts key claims and verifies them
+    via web search. Returns supported, unsupported, and unverifiable claims.
+    Use this after writing an article to validate accuracy."""
+    from app.quality import fact_check_article as _fc
+
+    result = await _fc(kb, slug)
+    return json.dumps(result, indent=2, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Knowledge graph tools
+# ---------------------------------------------------------------------------
+
+@tool
+async def find_related_articles(kb: str, slug: str) -> str:
+    """Find articles related to a given article via knowledge graph traversal.
+    Returns articles connected by shared entities and relationships."""
+    from app.knowledge_graph import get_related_by_graph
+
+    related = await get_related_by_graph(kb, slug)
+    if not related:
+        return "No related articles found via knowledge graph."
+    return json.dumps(related, indent=2, default=str)
+
+
+# ---------------------------------------------------------------------------
+# All tools exported
+# ---------------------------------------------------------------------------
+
+ALL_TOOLS = [
+    search_web,
+    search_kb,
+    read_webpage,
+    get_article,
+    list_articles,
+    write_article,
+    check_article_quality,
+    enrich_article,
+    add_crosslinks,
+    fact_check_article,
+    find_related_articles,
+]

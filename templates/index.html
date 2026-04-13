@@ -1,0 +1,355 @@
+{% extends "base.html" %}
+{% block title %}Articles{% endblock %}
+
+{% block sidebar %}
+<div class="sidebar-section">
+    <div class="sidebar-heading">Tags</div>
+    <ul class="sidebar-list sidebar-tag-list">
+        {% for tag, tag_articles in tag_groups.items() %}
+        <li><a href="/?tag={{ tag | urlencode }}" class="sidebar-tag-link" data-tag="{{ tag | e }}">{{ tag | e }} <span style="color: var(--color-text-subtle);">({{ tag_articles | length }})</span></a></li>
+        {% endfor %}
+    </ul>
+</div>
+{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Articles</h1>
+<p style="margin-bottom: 16px; color: var(--color-text-muted);">Browse and filter your knowledge base. Use <a href="/research">Research</a> to add new articles.</p>
+
+<!-- Source type filter -->
+<div id="source-filter-bar" style="margin-bottom: 6px; line-height: 2;">
+    <span style="font-size: 12px; color: var(--color-text-muted); margin-right: 4px;">Source:</span>
+    <span class="source-pill source-pill-active" data-source="all" onclick="filterSource('all')">All</span>
+    <span class="source-pill" data-source="web" onclick="filterSource('web')">&#127760; Web</span>
+    <span class="source-pill" data-source="local" onclick="filterSource('local')">&#128193; Local</span>
+    <span class="source-pill" data-source="media" onclick="filterSource('media')">&#127909; Media</span>
+    <span class="source-pill" data-source="manual" onclick="filterSource('manual')">&#9998; Manual</span>
+</div>
+
+<!-- Tag filter bar -->
+<div id="tag-filter-bar" style="margin-bottom: 8px; line-height: 2;">
+    <span id="tag-pill-all" class="tag-pill tag-pill-active" onclick="toggleTag(null)">All</span>
+    {% for tag in tag_groups.keys() %}
+    <span class="tag-pill" data-tag="{{ tag | e }}" onclick="toggleTag('{{ tag | e }}')">{{ tag | e }}</span>
+    {% endfor %}
+</div>
+
+<!-- Article count -->
+<p id="article-count" style="font-size: 13px; color: var(--color-text-muted); margin-bottom: 4px;">Showing {{ total_articles }} of {{ total_articles }} articles</p>
+
+<!-- Alphabet jump -->
+<div id="alpha-jump" style="font-size: 13px; margin-bottom: 8px; color: var(--color-text-subtle);">
+    Jump: <span id="alpha-links"></span>
+</div>
+
+<!-- Article table -->
+<table class="wiki-table" style="width: 100%;" id="article-table">
+    <thead>
+        <tr>
+            <th class="sortable" data-col="title" data-dir="asc" style="cursor: pointer;">Title <span class="sort-arrow">&#9650;</span></th>
+            <th class="sortable" data-col="source" data-dir="" style="cursor: pointer; width: 70px;">Source</th>
+            <th class="sortable" data-col="tags" data-dir="" style="cursor: pointer;">Tags</th>
+            <th class="sortable" data-col="words" data-dir="" style="cursor: pointer; width: 70px; text-align: right;">Words</th>
+            <th class="sortable" data-col="updated" data-dir="" style="cursor: pointer; width: 100px;">Updated</th>
+        </tr>
+    </thead>
+    <tbody id="article-tbody">
+        {% for a in articles %}
+        <tr class="article-row"
+            data-title="{{ a.title | e }}"
+            data-kb="{{ a.kb | e }}"
+            data-tags="{{ a.tags | join(',') | e }}"
+            data-words="{{ a.word_count }}"
+            data-updated="{{ a.updated | default('', true) }}"
+            data-source="{{ a.source_type | default('manual', true) | e }}"
+            data-slug="{{ a.slug | e }}"
+            data-letter="{{ a.title[0] | upper | e }}">
+            <td><a href="/wiki/{{ a.kb | e }}/{{ a.slug | e }}">{{ a.title | e }}</a></td>
+            <td>
+                <span class="source-badge source-{{ a.source_type | default('manual', true) | e }}">{{ a.source_type | default('manual', true) | e }}</span>
+            </td>
+            <td style="font-size: 13px;">
+                {% for t in a.tags %}
+                <span class="tag">{{ t | e }}</span>
+                {% endfor %}
+            </td>
+            <td style="text-align: right;">{{ a.word_count }}</td>
+            <td style="font-size: 13px; color: var(--color-text-muted);">{{ a.updated | default('&mdash;', true) }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not articles %}
+<p style="color: var(--color-text-subtle); padding: 20px 0;">No articles yet. Add markdown files to your KB wiki directories to get started.</p>
+{% endif %}
+{% endblock %}
+
+{% block styles %}
+<style nonce="{{ csp_nonce() }}">
+    /* Source-badge pairs — pastel tint + saturated text, with a dark
+       override so the row still reads in dark mode. */
+    :root {
+        --src-web-bg:    #d5e8f7; --src-web-fg:   #1a4d80;
+        --src-local-bg:  #d5f0d5; --src-local-fg: #1a5c1a;
+        --src-media-bg:  #f0e0f5; --src-media-fg: #5c1a6e;
+    }
+    @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+            --src-web-bg:   #15304a; --src-web-fg:   #79b8ff;
+            --src-local-bg: #0f2e18; --src-local-fg: #3fb950;
+            --src-media-bg: #2a1a33; --src-media-fg: #c280dd;
+        }
+    }
+    :root[data-theme="dark"] {
+        --src-web-bg:   #15304a; --src-web-fg:   #79b8ff;
+        --src-local-bg: #0f2e18; --src-local-fg: #3fb950;
+        --src-media-bg: #2a1a33; --src-media-fg: #c280dd;
+    }
+
+    .source-pill {
+        display: inline-block;
+        font-size: 12px;
+        padding: 1px 8px;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface-alt);
+        color: var(--color-text);
+        cursor: pointer;
+        margin: 0 2px 2px 0;
+        user-select: none;
+    }
+    .source-pill:hover { background: var(--color-surface-hover); }
+    .source-pill-active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+    .source-pill-active:hover { background: var(--color-primary-hover); }
+    .source-badge {
+        display: inline-block;
+        font-size: 11px;
+        padding: 0 5px;
+        border-radius: 0;
+        font-weight: 500;
+    }
+    .source-web    { background: var(--src-web-bg);   color: var(--src-web-fg); }
+    .source-local  { background: var(--src-local-bg); color: var(--src-local-fg); }
+    .source-media  { background: var(--src-media-bg); color: var(--src-media-fg); }
+    .source-manual { background: var(--color-surface-hover); color: var(--color-text-muted); }
+    .tag-pill {
+        display: inline-block;
+        font-size: 12px;
+        padding: 1px 8px;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface-alt);
+        color: var(--color-link);
+        cursor: pointer;
+        margin: 0 2px 2px 0;
+        user-select: none;
+    }
+    .tag-pill:hover {
+        background: var(--color-surface-hover);
+    }
+    .tag-pill-active {
+        background: var(--color-primary);
+        color: #fff;
+        border-color: var(--color-primary);
+    }
+    .tag-pill-active:hover {
+        background: var(--color-primary-hover);
+    }
+    .sortable .sort-arrow {
+        font-size: 10px;
+        color: var(--color-border);
+        margin-left: 2px;
+    }
+    .sortable[data-dir="asc"] .sort-arrow { color: var(--color-text); }
+    .sortable[data-dir="desc"] .sort-arrow { color: var(--color-text); }
+    #alpha-jump a {
+        margin: 0 2px;
+        font-size: 13px;
+    }
+    #alpha-jump a.alpha-inactive {
+        color: var(--color-border);
+        cursor: default;
+        text-decoration: none;
+    }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    var activeTags = [];
+    var activeSource = 'all';
+    var totalArticles = {{ total_articles }};
+    var rows = Array.prototype.slice.call(document.querySelectorAll('.article-row'));
+
+    // Build alphabet jump links
+    var letters = {};
+    rows.forEach(function(r) {
+        var l = r.getAttribute('data-letter');
+        if (l && /[A-Z]/.test(l)) letters[l] = true;
+    });
+    var alphaContainer = document.getElementById('alpha-links');
+    var alphaHtml = '';
+    for (var c = 65; c <= 90; c++) {
+        var ch = String.fromCharCode(c);
+        if (letters[ch]) {
+            alphaHtml += '<a href="#letter-' + ch + '" data-alpha-letter="' + ch + '">' + ch + '</a> ';
+        } else {
+            alphaHtml += '<a class="alpha-inactive">' + ch + '</a> ';
+        }
+    }
+    alphaContainer.innerHTML = alphaHtml;
+    alphaContainer.addEventListener('click', function(event) {
+        var a = event.target.closest('a[data-alpha-letter]');
+        if (!a) return;
+        event.preventDefault();
+        jumpToLetter(a.getAttribute('data-alpha-letter'));
+    });
+
+    // Tag filtering
+    window.toggleTag = function(tag) {
+        if (tag === null) {
+            activeTags = [];
+        } else {
+            var idx = activeTags.indexOf(tag);
+            if (idx === -1) {
+                activeTags.push(tag);
+            } else {
+                activeTags.splice(idx, 1);
+            }
+        }
+        applyFilters();
+        updatePills();
+    };
+
+    function updatePills() {
+        var allPill = document.getElementById('tag-pill-all');
+        var pills = document.querySelectorAll('#tag-filter-bar .tag-pill[data-tag]');
+        if (activeTags.length === 0) {
+            allPill.classList.add('tag-pill-active');
+        } else {
+            allPill.classList.remove('tag-pill-active');
+        }
+        pills.forEach(function(p) {
+            var t = p.getAttribute('data-tag');
+            if (activeTags.indexOf(t) !== -1) {
+                p.classList.add('tag-pill-active');
+            } else {
+                p.classList.remove('tag-pill-active');
+            }
+        });
+    }
+
+    // Source filtering
+    window.filterSource = function(source) {
+        activeSource = source;
+        var pills = document.querySelectorAll('#source-filter-bar .source-pill');
+        pills.forEach(function(p) {
+            if (p.getAttribute('data-source') === source) {
+                p.classList.add('source-pill-active');
+            } else {
+                p.classList.remove('source-pill-active');
+            }
+        });
+        applyFilters();
+    };
+
+    function applyFilters() {
+        var visible = 0;
+        rows.forEach(function(r) {
+            var show = true;
+
+            // Source filter
+            if (activeSource !== 'all') {
+                if (r.getAttribute('data-source') !== activeSource) {
+                    show = false;
+                }
+            }
+
+            // Tag filter
+            if (show && activeTags.length > 0) {
+                var rowTags = r.getAttribute('data-tags').split(',');
+                for (var i = 0; i < activeTags.length; i++) {
+                    if (rowTags.indexOf(activeTags[i]) === -1) {
+                        show = false;
+                        break;
+                    }
+                }
+            }
+            r.style.display = show ? '' : 'none';
+            if (show) visible++;
+        });
+        document.getElementById('article-count').textContent = 'Showing ' + visible + ' of ' + totalArticles + ' articles';
+    }
+
+    // Column sorting
+    var currentSort = { col: 'title', dir: 'asc' };
+    var headers = document.querySelectorAll('.sortable');
+    headers.forEach(function(th) {
+        th.addEventListener('click', function() {
+            var col = th.getAttribute('data-col');
+            var dir;
+            if (currentSort.col === col) {
+                dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+            } else {
+                dir = 'asc';
+            }
+            currentSort = { col: col, dir: dir };
+
+            // Update header arrows
+            headers.forEach(function(h) {
+                h.setAttribute('data-dir', '');
+                h.querySelector('.sort-arrow').innerHTML = '&#9650;';
+            });
+            th.setAttribute('data-dir', dir);
+            th.querySelector('.sort-arrow').innerHTML = dir === 'asc' ? '&#9650;' : '&#9660;';
+
+            sortTable(col, dir);
+        });
+    });
+
+    function sortTable(col, dir) {
+        var tbody = document.getElementById('article-tbody');
+        rows.sort(function(a, b) {
+            var va, vb;
+            if (col === 'words') {
+                va = parseInt(a.getAttribute('data-words'), 10) || 0;
+                vb = parseInt(b.getAttribute('data-words'), 10) || 0;
+                return dir === 'asc' ? va - vb : vb - va;
+            }
+            va = (a.getAttribute('data-' + col) || '').toLowerCase();
+            vb = (b.getAttribute('data-' + col) || '').toLowerCase();
+            if (va < vb) return dir === 'asc' ? -1 : 1;
+            if (va > vb) return dir === 'asc' ? 1 : -1;
+            return 0;
+        });
+        rows.forEach(function(r) {
+            tbody.appendChild(r);
+        });
+    }
+
+    // Alphabet jump
+    window.jumpToLetter = function(letter) {
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].style.display !== 'none' && rows[i].getAttribute('data-letter') === letter) {
+                rows[i].scrollIntoView({ behavior: 'smooth', block: 'start' });
+                return;
+            }
+        }
+    };
+
+    // Sidebar tag links: click to filter on main page
+    var sidebarTagLinks = document.querySelectorAll('.sidebar-tag-link');
+    sidebarTagLinks.forEach(function(link) {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            var tag = link.getAttribute('data-tag');
+            activeTags = [tag];
+            applyFilters();
+            updatePills();
+            var filterBar = document.getElementById('tag-filter-bar');
+            if (filterBar) filterBar.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    });
+})();
+</script>
+{% endblock %}

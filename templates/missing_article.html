@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}{{ pretty_title }} (not yet written){% endblock %}
+
+{% block content %}
+<article class="wiki-content">
+    <div class="breadcrumb">
+        <a href="/">Home</a>
+        <span class="sep">&gt;</span>
+        <a href="/?kb={{ kb | e }}">{{ kb | e }}</a>
+        <span class="sep">&gt;</span>
+        <span class="current">{{ pretty_title | e }}</span>
+    </div>
+
+    <h1 id="missing-title">{{ pretty_title | e }}</h1>
+
+    <div id="missing-banner" style="background: color-mix(in srgb, var(--color-warning) 12%, transparent); border-left: 3px solid var(--color-warning); padding: 10px 14px; margin: 16px 0;">
+        <strong>This article hasn't been written yet.</strong>
+        <p style="margin: 6px 0 0; color: var(--color-text-muted);">
+            You arrived here from a wikilink, but no page exists for
+            <code>{{ slug | e }}</code> in KB <code>{{ kb | e }}</code>.
+            You can queue research on this topic — the worker will generate
+            the article and this page will reload automatically when it's ready.
+        </p>
+    </div>
+
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin: 16px 0;">
+        <button id="btn-research" class="wiki-btn wiki-btn-primary" style="padding: 6px 14px; font-size: 13px;">
+            Research this topic
+        </button>
+        <a href="/?kb={{ kb | e }}" class="wiki-btn" style="padding: 6px 14px; font-size: 13px;">
+            Back to {{ kb | e }}
+        </a>
+    </div>
+
+    <p id="missing-status" style="color: var(--color-text-subtle); font-size: 13px; min-height: 1.2em;"></p>
+
+    {% if suggestions %}
+    <section style="margin-top: 24px;">
+        <h2 style="font-size: 16px; border-bottom: 1px solid var(--color-border); padding-bottom: 4px;">Related articles in {{ kb | e }}</h2>
+        <ul style="margin-top: 8px;">
+            {% for s in suggestions %}
+            <li style="margin-bottom: 6px;"><a href="/wiki/{{ kb | e }}/{{ s.slug | e }}">{{ s.title | e }}</a></li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
+</article>
+
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    var KB = {{ kb | tojson }};
+    var SLUG = {{ slug | tojson }};
+    var TOPIC = {{ pretty_title | tojson }};
+    var btn = document.getElementById('btn-research');
+    var status = document.getElementById('missing-status');
+
+    function setStatus(msg, color) {
+        status.style.color = color || 'var(--color-text-subtle)';
+        status.textContent = msg;
+    }
+
+    var jobId = null;
+    var pollHandle = null;
+    var startedAt = 0;
+    var maxMs = 5 * 60 * 1000;
+
+    async function pollArticle() {
+        var elapsed = Date.now() - startedAt;
+        var elapsedSec = Math.round(elapsed / 1000);
+        try {
+            var resp = await fetch('/api/articles/' + encodeURIComponent(KB) + '/' + encodeURIComponent(SLUG), {cache: 'no-store'});
+            if (resp.ok) {
+                setStatus('Article ready — reloading...', 'var(--color-success)');
+                setTimeout(function() { location.reload(); }, 800);
+                return;
+            }
+        } catch (e) {}
+
+        if (elapsed >= maxMs) {
+            setStatus('Still researching (' + elapsedSec + 's). Keep this page open; it will reload when the article is written.', 'var(--color-warning)');
+            pollHandle = setTimeout(pollArticle, 30 * 1000);
+            return;
+        }
+        setStatus('Researching (' + elapsedSec + 's)...', 'var(--color-warning)');
+        var interval = elapsed < 30000 ? 3000 : 6000;
+        pollHandle = setTimeout(pollArticle, interval);
+    }
+
+    btn.addEventListener('click', async function() {
+        btn.disabled = true;
+        setStatus('Queuing research for "' + TOPIC + '"...', 'var(--color-warning)');
+        try {
+            var resp = await fetch('/api/research', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({topic: TOPIC, kb: KB})
+            });
+            var data = await resp.json();
+            if (resp.status === 429 && data.existing_job_id) {
+                jobId = data.existing_job_id;
+                setStatus('Already being researched (job ' + jobId + '). Waiting for it to finish...', 'var(--color-warning)');
+                startedAt = Date.now();
+                pollArticle();
+                return;
+            }
+            if (!resp.ok) {
+                setStatus('Error: ' + (data.detail || resp.statusText), 'var(--color-error)');
+                btn.disabled = false;
+                return;
+            }
+            jobId = data.job_id;
+            setStatus('Research queued (job ' + jobId + '). Polling for completion...', 'var(--color-warning)');
+            startedAt = Date.now();
+            pollArticle();
+        } catch (e) {
+            setStatus('Error: ' + e.message, 'var(--color-error)');
+            btn.disabled = false;
+        }
+    });
+})();
+</script>
+{% endblock %}

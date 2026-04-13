@@ -1,0 +1,37 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pytest-unit-fast
+        name: pytest unit (fast path)
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && DB_BACKEND=sqlite STORAGE_BACKEND=local .venv/bin/python -m pytest tests/unit -x -q -m "not heavy" --no-header 2>&1 | tail -20'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: coverage-ratchet
+        name: coverage ratchet (block regressions)
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && if [ -f coverage.xml ]; then .venv/bin/python scripts/ratchet_coverage.py; else echo "No coverage.xml yet — run make coverage to establish baseline" && exit 0; fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

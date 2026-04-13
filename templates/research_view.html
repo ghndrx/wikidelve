@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ filename | default('Research', true) | e }}{% endblock %}
+
+{% block content %}
+<!-- Breadcrumbs -->
+<div class="breadcrumbs">
+    <a href="/">Main page</a><span class="sep">&gt;</span><a href="/research">Research</a><span class="sep">&gt;</span><span>{{ filename | default('Research', true) | e }}</span>
+</div>
+
+<h1 class="page-title">{{ filename | default('Research', true) | e }}</h1>
+
+<!-- Content -->
+<div class="article-content">
+    {{ html | default('', true) | safe }}
+</div>
+
+<!-- Back -->
+<div style="border-top: 1px solid #eaecf0; padding-top: 12px; margin-top: 24px;">
+    <a href="/research">&larr; Back to research</a>
+</div>
+{% endblock %}

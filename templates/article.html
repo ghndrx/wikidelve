@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+{% block title %}{{ article.title | default('Article', true) | e }}{% endblock %}
+
+{% block sidebar %}{% endblock %}
+
+{% block content %}
+<!-- Breadcrumbs -->
+<div class="breadcrumbs">
+    <a href="/">Articles</a><span class="sep">&gt;</span><a href="/palace">{{ article.kb | default('', true) | e }}</a><span class="sep">&gt;</span><span id="palace-breadcrumb"></span><span>{{ article.title | default('Untitled', true) | e }}</span>
+</div>
+
+<!-- Title + Actions -->
+<div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
+    <h1 class="page-title" style="flex: 1; margin-bottom: 0;">{{ article.title | default('Untitled', true) | e }}</h1>
+    <div style="display: flex; gap: 6px; flex-shrink: 0; padding-top: 8px;">
+        <button onclick="enrichArticle()" id="btn-enrich-top" class="wiki-btn" title="Rewrite with deeper content and more detail" style="font-size: 12px; padding: 3px 10px;">Enrich</button>
+        <button onclick="refreshArticle()" id="btn-refresh-top" class="wiki-btn" title="Check for outdated facts and update" style="font-size: 12px; padding: 3px 10px;">Refresh</button>
+    </div>
+</div>
+<div id="action-status-top" style="font-size: 12px; color: var(--color-text-subtle); margin-bottom: 12px;"></div>
+
+<!-- Infobox -->
+<div class="infobox">
+    <div class="infobox-title">{{ article.title | default('Article', true) | e }}</div>
+    <table>
+        <tr>
+            <th>KB</th>
+            <td>{{ article.kb | default('', true) | e }}</td>
+        </tr>
+        <tr>
+            <th>Status</th>
+            <td style="text-transform: capitalize;">{{ article.status | default('draft', true) | e }}</td>
+        </tr>
+        {% if article.confidence %}
+        <tr>
+            <th>Confidence</th>
+            <td>{{ article.confidence | e }}</td>
+        </tr>
+        {% endif %}
+        <tr>
+            <th>Words</th>
+            <td>{{ "{:,}".format(article.word_count | default(0, true)) }}</td>
+        </tr>
+        {% if article.updated %}
+        <tr>
+            <th>Updated</th>
+            <td>{{ article.updated }}</td>
+        </tr>
+        {% endif %}
+        {% if article.tags %}
+        <tr>
+            <th>Tags</th>
+            <td>{% for t in article.tags %}{{ t | e }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+        </tr>
+        {% endif %}
+    </table>
+</div>
+
+{% if article.summary %}
+<p style="color: var(--color-text-muted); margin-bottom: 16px; font-style: italic;">{{ article.summary | e }}</p>
+{% endif %}
+
+{# Confidence banner from article_claims — class-driven so tokens flip on dark mode. #}
+{% if confidence %}
+<div class="confidence-banner confidence-{{ confidence.level | default('low') | e }}">
+    <strong>{{ confidence.emoji }} Confidence: {{ confidence.level | title }}</strong>
+    &middot; {{ confidence.verified }} verified, {{ confidence.unverified }} unverified{% if confidence.outdated %}, {{ confidence.outdated }} outdated{% endif %}
+    &middot; avg score {{ confidence.avg_confidence }}
+    <span style="color: var(--color-text-subtle); font-size: 11px;">(based on {{ confidence.total }} structured claim{% if confidence.total != 1 %}s{% endif %} from the synthesis critique pass)</span>
+</div>
+<style nonce="{{ csp_nonce() }}">
+    .confidence-banner {
+        padding: 8px 12px;
+        margin: 8px 0 16px;
+        font-size: 13px;
+        border-left: 3px solid;
+    }
+    .confidence-high   { border-left-color: var(--color-success); background: color-mix(in srgb, var(--color-success) 8%, transparent); }
+    .confidence-high strong { color: var(--color-success); }
+    .confidence-medium { border-left-color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 8%, transparent); }
+    .confidence-medium strong { color: var(--color-warning); }
+    .confidence-low    { border-left-color: var(--color-error);   background: color-mix(in srgb, var(--color-error)   8%, transparent); }
+    .confidence-low strong    { color: var(--color-error); }
+</style>
+{% endif %}
+
+<!-- Article Content -->
+<div class="article-content clearfix">
+    {{ article.html | default('', true) | safe }}
+</div>
+
+{# "You might also research" panel #}
+<h2 class="section-heading" id="suggestions">You might also research</h2>
+<div id="suggestions-panel" style="font-size: 13px; color: var(--color-text-muted);">
+    <span id="suggestions-loading">Loading suggestions...</span>
+</div>
+<script nonce="{{ csp_nonce() }}">
+(async function loadSuggestions() {
+    try {
+        const resp = await fetch('/api/articles/{{ article.kb | e }}/{{ article.slug | e }}/suggestions');
+        if (!resp.ok) {
+            document.getElementById('suggestions-loading').textContent = '(none available)';
+            return;
+        }
+        const data = await resp.json();
+        const panel = document.getElementById('suggestions-panel');
+        if (!data.suggestions || !data.suggestions.length) {
+            panel.innerHTML = '<span style="color: var(--color-text-subtle);">No related topics yet. Add more articles or run auto-discovery to populate suggestions.</span>';
+            return;
+        }
+        const grouped = { related_article: [], graph_neighbour: [], pending_topic: [] };
+        data.suggestions.forEach(s => { if (grouped[s.kind]) grouped[s.kind].push(s); });
+
+        let html = '';
+        if (grouped.related_article.length) {
+            html += '<div style="margin-bottom: 8px;"><strong>Related articles:</strong> ';
+            html += grouped.related_article.slice(0, 6).map(s =>
+                '<a href="' + s.url + '" style="margin-right: 8px;">' + (s.title || s.slug) + '</a>'
+            ).join('') + '</div>';
+        }
+        if (grouped.graph_neighbour.length) {
+            html += '<div style="margin-bottom: 8px;"><strong>Graph neighbours:</strong> ';
+            html += grouped.graph_neighbour.slice(0, 6).map(s =>
+                '<a href="' + s.url + '" style="margin-right: 8px;">' + (s.title || s.slug) + '</a>'
+            ).join('') + '</div>';
+        }
+        if (grouped.pending_topic.length) {
+            html += '<div><strong>Queued for research:</strong> ';
+            html += grouped.pending_topic.slice(0, 6).map(s =>
+                '<span style="margin-right: 8px;">' + (s.topic || '?') + ' <span style="font-size:11px;color: var(--color-text-subtle);">(' + (s.source || 'auto') + ')</span></span>'
+            ).join('') + '</div>';
+        }
+        panel.innerHTML = html;
+    } catch (e) {
+        document.getElementById('suggestions-loading').textContent = 'Failed to load: ' + e.message;
+    }
+})();
+</script>
+
+{% if article.source_files %}
+<h2 class="section-heading">Sources</h2>
+<ul style="margin: 0 0 16px 24px;">
+    {% for src in article.source_files %}
+    <li style="font-size: 12px; font-family: monospace; color: var(--color-text-muted); word-break: break-all; margin-bottom: 4px;">{{ src | e }}</li>
+    {% endfor %}
+</ul>
+{% endif %}
+
+<!-- Article Actions -->
+<div style="border-top: 1px solid var(--color-border-light); padding-top: 12px; margin-top: 24px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+    <a href="/">&larr; Back to main page</a>
+    <span style="flex: 1;"></span>
+    <button onclick="enrichArticle()" id="btn-enrich" class="wiki-btn" title="Rewrite with deeper content, better structure, and more detail">Enrich</button>
+    <button onclick="refreshArticle()" id="btn-refresh" class="wiki-btn" title="Check for outdated facts and update with latest information">Refresh</button>
+    <span id="action-status" style="font-size: 12px; color: var(--color-text-subtle);"></span>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+const HALL_COLORS = {
+    'how-to': '#2563eb', 'architecture': '#7c3aed', 'comparison': '#ea580c',
+    'reference': '#059669', 'troubleshooting': '#dc2626', 'deep-dive': '#4338ca',
+    'integration': '#0891b2', 'release-notes': '#ca8a04'
+};
+const HALL_LABELS = {
+    'how-to': 'How-To', 'architecture': 'Architecture', 'comparison': 'Comparison',
+    'reference': 'Reference', 'troubleshooting': 'Troubleshooting', 'deep-dive': 'Deep Dive',
+    'integration': 'Integration', 'release-notes': 'Release Notes'
+};
+
+(async () => {
+    try {
+        const resp = await fetch('/api/palace/article/{{ article.kb | e }}/{{ article.slug | e }}');
+        const data = await resp.json();
+        if (!data.hall) return;
+
+        // Add hall badge to breadcrumb
+        const bc = document.getElementById('palace-breadcrumb');
+        const color = HALL_COLORS[data.hall] || 'var(--color-text-subtle)';
+        bc.innerHTML = '<a href="/palace" style="display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 0; background: ' + color + '18; color: ' + color + '; text-decoration: none; font-weight: 500;">' + (HALL_LABELS[data.hall] || data.hall) + '</a><span class="sep">&gt;</span>';
+
+        // Add to infobox
+        const infobox = document.querySelector('.infobox table');
+        if (infobox) {
+            const hallRow = infobox.insertRow();
+            hallRow.innerHTML = '<th>Hall</th><td><span style="display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 0; background: ' + color + '18; color: ' + color + ';">' + (HALL_LABELS[data.hall] || data.hall) + '</span></td>';
+
+            if (data.rooms && data.rooms.length > 0) {
+                const roomRow = infobox.insertRow();
+                roomRow.innerHTML = '<th>Rooms</th><td>' + data.rooms.map(r =>
+                    '<a href="/palace" style="font-size: 12px; color: #0645ad; margin-right: 6px;">' + r.name + '</a>'
+                ).join('') + '</td>';
+            }
+        }
+    } catch (e) { /* palace data not available yet */ }
+})();
+
+// --- Article action buttons ---
+var KB = '{{ article.kb | e }}';
+var SLUG = '{{ article.slug | e }}';
+var statusEl = document.getElementById('action-status');
+
+function setStatus(msg, color) {
+    statusEl.style.color = color || 'var(--color-text-subtle)';
+    statusEl.textContent = msg;
+    var topStatus = document.getElementById('action-status-top');
+    if (topStatus) { topStatus.style.color = color || 'var(--color-text-subtle)'; topStatus.textContent = msg; }
+}
+
+function disableButtons(disabled) {
+    ['btn-enrich', 'btn-refresh', 'btn-enrich-top', 'btn-refresh-top'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.disabled = disabled;
+    });
+}
+
+async function enrichArticle() {
+    if (!confirm('Enrich this article? This will rewrite it with deeper content, better structure, and more examples. The current version will be replaced.')) return;
+    disableButtons(true);
+    setStatus('Queuing enrich...', 'var(--color-warning)');
+    try {
+        var resp = await fetch('/api/quality/enrich/' + encodeURIComponent(KB) + '/' + encodeURIComponent(SLUG), {method: 'POST'});
+        var data = await resp.json();
+        if (resp.ok) {
+            setStatus('Enrich queued — article will be rewritten by the worker. Reload in ~30s.', 'var(--color-success)');
+            pollForChanges();
+        } else {
+            setStatus('Error: ' + (data.detail || resp.statusText), 'var(--color-error)');
+            disableButtons(false);
+        }
+    } catch (e) {
+        setStatus('Error: ' + e.message, 'var(--color-error)');
+        disableButtons(false);
+    }
+}
+
+async function refreshArticle() {
+    if (!confirm('Refresh this article? This will check for outdated facts (versions, pricing, dates) and update them with the latest information.')) return;
+    disableButtons(true);
+    setStatus('Queuing freshness audit...', 'var(--color-warning)');
+    try {
+        var resp = await fetch('/api/quality/freshness/' + encodeURIComponent(KB) + '/' + encodeURIComponent(SLUG), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({auto_update: true})
+        });
+        var data = await resp.json();
+        if (resp.ok) {
+            setStatus('Freshness audit queued — checking for stale content. Reload in ~30s.', 'var(--color-success)');
+            pollForChanges();
+        } else {
+            setStatus('Error: ' + (data.detail || resp.statusText), 'var(--color-error)');
+            disableButtons(false);
+        }
+    } catch (e) {
+        setStatus('Error: ' + e.message, 'var(--color-error)');
+        disableButtons(false);
+    }
+}
+
+function pollForChanges() {
+    // Poll the article for changes and auto-reload when updated.
+    // Two phases: fast polling for the first ~30s, then slower polling
+    // for up to 5 minutes total so slow/busy workers still trigger a reload.
+    var originalWords = {{ article.word_count | default(0, true) }};
+    var originalUpdated = '{{ article.updated | default("", true) | e }}';
+    var startedAt = Date.now();
+    var fastPhaseMs = 30 * 1000;
+    var maxMs = 5 * 60 * 1000;
+    var pollHandle = null;
+
+    async function tick() {
+        var elapsed = Date.now() - startedAt;
+        var elapsedSec = Math.round(elapsed / 1000);
+
+        try {
+            var resp = await fetch(
+                '/api/articles/' + encodeURIComponent(KB) + '/' + encodeURIComponent(SLUG),
+                {cache: 'no-store'}
+            );
+            if (resp.ok) {
+                var article = await resp.json();
+                if (article.word_count !== originalWords || article.updated !== originalUpdated) {
+                    if (pollHandle) clearTimeout(pollHandle);
+                    setStatus('Article updated — reloading...', 'var(--color-success)');
+                    setTimeout(function() { location.reload(); }, 800);
+                    return;
+                }
+            }
+        } catch (e) { /* transient; keep polling */ }
+
+        if (elapsed >= maxMs) {
+            setStatus(
+                'Worker is still processing (' + elapsedSec + 's). Keep this page open; '
+                + 'it will reload automatically when the article updates.',
+                'var(--color-warning)'
+            );
+            disableButtons(false);
+            pollHandle = setTimeout(tick, 30 * 1000);
+            return;
+        }
+
+        var label = elapsed < fastPhaseMs
+            ? 'Waiting for worker... (' + elapsedSec + 's)'
+            : 'Still waiting — worker may be busy with other jobs (' + elapsedSec + 's)';
+        setStatus(label, 'var(--color-warning)');
+
+        var interval = elapsed < fastPhaseMs ? 2000 : 5000;
+        pollHandle = setTimeout(tick, interval);
+    }
+
+    tick();
+}
+</script>
+{% endblock %}

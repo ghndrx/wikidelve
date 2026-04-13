@@ -1,0 +1,647 @@
+{% extends "base.html" %}
+{% block title %}Palace View{% endblock %}
+
+{% block content %}
+<style nonce="{{ csp_nonce() }}">
+    /* Wiki-straightedge palace layout: infobox-style tables, no rounded
+       corners, no colored card headers, neutral surfaces. Dark mode is
+       a direct palette swap — no alpha overlays that vanish. */
+
+    /* Hall colour tokens — used only for the tiny 10px indicator
+       squares, never as full backgrounds. Keeps dark mode readable. */
+    :root {
+        --hall-howto:       #2563eb;
+        --hall-arch:        #7c3aed;
+        --hall-comp:        #ea580c;
+        --hall-ref:         #059669;
+        --hall-trouble:     #dc2626;
+        --hall-deep:        #4338ca;
+        --hall-integ:       #0891b2;
+        --hall-release:     #ca8a04;
+    }
+    @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+            --hall-howto:   #60a5fa;
+            --hall-arch:    #a78bfa;
+            --hall-comp:    #fb923c;
+            --hall-ref:     #34d399;
+            --hall-trouble: #f87171;
+            --hall-deep:    #818cf8;
+            --hall-integ:   #22d3ee;
+            --hall-release: #facc15;
+        }
+    }
+    :root[data-theme="dark"] {
+        --hall-howto:   #60a5fa;
+        --hall-arch:    #a78bfa;
+        --hall-comp:    #fb923c;
+        --hall-ref:     #34d399;
+        --hall-trouble: #f87171;
+        --hall-deep:    #818cf8;
+        --hall-integ:   #22d3ee;
+        --hall-release: #facc15;
+    }
+
+    .palace-intro {
+        margin-bottom: 12px;
+        color: var(--color-text-muted);
+        font-size: 13px;
+        max-width: 720px;
+    }
+    .palace-toolbar {
+        margin-bottom: 16px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--color-border-light);
+    }
+    .palace-stats-text {
+        font-size: 12px;
+        color: var(--color-text-subtle);
+    }
+    .palace-btn {
+        font-family: inherit;
+        font-size: 12px;
+        padding: 3px 10px;
+        cursor: pointer;
+        background: var(--color-surface-alt);
+        color: var(--color-text);
+        border: 1px solid var(--color-border);
+        border-radius: 0;
+    }
+    .palace-btn:hover { background: var(--color-surface-hover); }
+
+    /* Legend: a single inline row of colour-square + label. */
+    .hall-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin-bottom: 20px;
+        padding: 8px 12px;
+        background: var(--color-surface-alt);
+        border: 1px solid var(--color-border);
+        font-size: 12px;
+    }
+    .hall-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--color-text);
+    }
+    .hall-legend-square {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        flex-shrink: 0;
+    }
+
+    /* Wings: wiki section headings with counts inline. */
+    .wing-block { margin-bottom: 28px; }
+    .wing-header {
+        margin: 0 0 8px 0;
+        padding-bottom: 4px;
+        border-bottom: 1px solid var(--color-border);
+        font-size: 18px;
+        font-weight: normal;
+        color: var(--color-text-strong);
+        font-family: var(--font-serif);
+    }
+    .wing-header .wing-count {
+        font-size: 12px;
+        color: var(--color-text-subtle);
+        font-family: var(--font-body);
+        margin-left: 8px;
+    }
+
+    /* Halls: one plain wiki-table per wing. No colored headers. The
+       hall indicator is a small coloured square in the label cell. */
+    .halls-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        margin-bottom: 16px;
+        border: 1px solid var(--color-border);
+    }
+    .halls-table thead th {
+        background: var(--color-surface-hover);
+        color: var(--color-text);
+        font-weight: bold;
+        text-align: left;
+        padding: 5px 10px;
+        border-bottom: 1px solid var(--color-border);
+        font-size: 12px;
+    }
+    .halls-table tbody td {
+        padding: 6px 10px;
+        border-top: 1px solid var(--color-border-light);
+        vertical-align: top;
+        color: var(--color-text);
+    }
+    .halls-table tbody tr {
+        cursor: pointer;
+    }
+    .halls-table tbody tr:hover {
+        background: var(--color-surface-hover);
+    }
+    .hall-indicator {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 6px;
+        vertical-align: baseline;
+        flex-shrink: 0;
+    }
+    .hall-name {
+        font-weight: 600;
+        color: var(--color-text-strong);
+    }
+    .hall-count-cell {
+        text-align: right;
+        width: 50px;
+        font-variant-numeric: tabular-nums;
+    }
+    .hall-articles-cell {
+        font-size: 12px;
+    }
+    .hall-articles-cell a {
+        color: var(--color-link);
+    }
+    .hall-articles-cell .more {
+        color: var(--color-text-subtle);
+        font-size: 11px;
+    }
+
+    /* Rooms: plain flow of wiki-table-styled inline blocks. Straight
+       borders, always-readable surface (not alpha overlays). */
+    .rooms-header {
+        margin: 16px 0 8px 0;
+        font-size: 12px;
+        font-weight: bold;
+        color: var(--color-text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .rooms-flow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 6px;
+    }
+    .room-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 8px;
+        font-size: 12px;
+        background: var(--color-surface-alt);
+        border: 1px solid var(--color-border-light);
+        color: var(--color-text);
+        cursor: pointer;
+    }
+    .room-item:hover {
+        background: var(--color-surface-hover);
+        border-color: var(--color-border);
+    }
+    .room-item .room-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        flex-shrink: 0;
+    }
+    .room-item .room-count {
+        color: var(--color-text-subtle);
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* Detail panel: wiki infobox look. */
+    .palace-detail {
+        margin-top: 20px;
+        padding: 12px 16px;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface-alt);
+        color: var(--color-text);
+    }
+    .palace-detail-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--color-border);
+    }
+    .palace-detail-title {
+        margin: 0;
+        font-size: 16px;
+        font-weight: bold;
+        color: var(--color-text-strong);
+    }
+    .palace-detail-close {
+        cursor: pointer;
+        background: none;
+        border: none;
+        font-size: 18px;
+        color: var(--color-text-subtle);
+        line-height: 1;
+        padding: 0 4px;
+    }
+    .palace-detail-close:hover { color: var(--color-text); }
+    .palace-detail-subtitle {
+        margin: 6px 0 10px 0;
+        font-size: 12px;
+        color: var(--color-text-subtle);
+    }
+    .palace-detail-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 6px;
+    }
+    .palace-detail-card {
+        padding: 6px 10px;
+        border: 1px solid var(--color-border-light);
+        background: var(--color-surface);
+    }
+    .palace-detail-card a {
+        color: var(--color-link);
+        text-decoration: none;
+        font-weight: 500;
+    }
+    .palace-detail-card a:hover { text-decoration: underline; }
+    .palace-detail-meta {
+        font-size: 11px;
+        color: var(--color-text-subtle);
+        margin-top: 3px;
+    }
+    .palace-detail-summary {
+        font-size: 12px;
+        color: var(--color-text-muted);
+        margin-top: 5px;
+        max-height: 34px;
+        overflow: hidden;
+    }
+    .palace-detail-hall-badge {
+        display: inline-block;
+        font-size: 10px;
+        padding: 0 6px;
+        margin-left: 6px;
+        border: 1px solid currentColor;
+    }
+</style>
+
+<h1 class="page-title">Palace View</h1>
+<p class="palace-intro">Navigate your knowledge base as a spatial hierarchy: Wings (KBs) &rarr; Halls (article types) &rarr; Rooms (topic clusters).</p>
+
+<div class="palace-toolbar">
+    <span id="palace-stats" class="palace-stats-text">Loading palace data&hellip;</span>
+    <button type="button" id="palace-rebuild-btn" class="palace-btn">Rebuild Palace</button>
+</div>
+
+<!-- Hall legend -->
+<div id="hall-legend" class="hall-legend" style="display: none;"></div>
+
+<!-- Palace floor plan -->
+<div id="palace-container" style="min-height: 400px;"></div>
+
+<!-- Detail panel -->
+<div id="palace-detail" class="palace-detail" style="display: none;">
+    <div class="palace-detail-header">
+        <h3 id="detail-title" class="palace-detail-title"></h3>
+        <button type="button" id="palace-detail-close" class="palace-detail-close" aria-label="Close">&times;</button>
+    </div>
+    <p id="detail-subtitle" class="palace-detail-subtitle"></p>
+    <div id="detail-articles"></div>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+const HALL_TOKENS = {
+    'how-to':        'var(--hall-howto)',
+    'architecture':  'var(--hall-arch)',
+    'comparison':    'var(--hall-comp)',
+    'reference':     'var(--hall-ref)',
+    'troubleshooting':'var(--hall-trouble)',
+    'deep-dive':     'var(--hall-deep)',
+    'integration':   'var(--hall-integ)',
+    'release-notes': 'var(--hall-release)',
+};
+
+const HALL_LABELS = {
+    'how-to':         'How-To',
+    'architecture':   'Architecture',
+    'comparison':     'Comparison',
+    'reference':      'Reference',
+    'troubleshooting':'Troubleshooting',
+    'deep-dive':      'Deep Dive',
+    'integration':    'Integration',
+    'release-notes':  'Release Notes'
+};
+
+let palaceData = null;
+
+(function() {
+    var closeBtn = document.getElementById('palace-detail-close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', function() {
+            document.getElementById('palace-detail').style.display = 'none';
+        });
+    }
+    var rebuildBtn = document.getElementById('palace-rebuild-btn');
+    if (rebuildBtn) {
+        rebuildBtn.addEventListener('click', buildPalace);
+    }
+})();
+
+async function loadPalace() {
+    const resp = await fetch('/api/palace/map');
+    palaceData = await resp.json();
+
+    if (!palaceData.wings || Object.keys(palaceData.wings).length === 0) {
+        document.getElementById('palace-stats').innerHTML =
+            'No palace data yet. <a href="#" id="palace-empty-build">Click to classify articles</a>.';
+        var emptyBtn = document.getElementById('palace-empty-build');
+        if (emptyBtn) emptyBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            buildPalace();
+        });
+        return;
+    }
+
+    renderLegend();
+    renderPalace();
+}
+
+function renderLegend() {
+    const legend = document.getElementById('hall-legend');
+    legend.style.display = 'flex';
+    legend.innerHTML = '';
+    Object.entries(HALL_TOKENS).forEach(function([hall, color]) {
+        const item = document.createElement('span');
+        item.className = 'hall-legend-item';
+        const square = document.createElement('span');
+        square.className = 'hall-legend-square';
+        square.style.background = color;
+        item.appendChild(square);
+        item.appendChild(document.createTextNode(HALL_LABELS[hall] || hall));
+        legend.appendChild(item);
+    });
+}
+
+function el(tag, opts) {
+    opts = opts || {};
+    const e = document.createElement(tag);
+    if (opts.cls) e.className = opts.cls;
+    if (opts.text != null) e.textContent = opts.text;
+    if (opts.html != null) e.innerHTML = opts.html;
+    if (opts.style) {
+        for (const k in opts.style) e.style[k] = opts.style[k];
+    }
+    return e;
+}
+
+function renderPalace() {
+    const container = document.getElementById('palace-container');
+    container.innerHTML = '';
+
+    let totalClassified = 0;
+    let totalRooms = 0;
+
+    for (const [wingName, wing] of Object.entries(palaceData.wings)) {
+        totalClassified += wing.classified_count || 0;
+        totalRooms += Object.keys(wing.rooms || {}).length;
+
+        const wingDiv = el('div', {cls: 'wing-block'});
+
+        // Wing header — serif wiki section heading with count
+        const header = el('h2', {cls: 'wing-header'});
+        header.appendChild(document.createTextNode(
+            wingName.charAt(0).toUpperCase() + wingName.slice(1) + ' Wing'
+        ));
+        const wingCount = el('span', {
+            cls: 'wing-count',
+            text: (wing.article_count || 0).toLocaleString() + ' articles',
+        });
+        header.appendChild(wingCount);
+        wingDiv.appendChild(header);
+
+        // Halls — wiki-table layout
+        const table = el('table', {cls: 'halls-table'});
+        const thead = el('thead');
+        const theadRow = el('tr');
+        ['Hall', 'Count', 'Top articles'].forEach(function(h, i) {
+            const th = el('th', {text: h});
+            if (i === 1) th.style.textAlign = 'right';
+            theadRow.appendChild(th);
+        });
+        thead.appendChild(theadRow);
+        table.appendChild(thead);
+
+        const tbody = el('tbody');
+        const halls = wing.halls || {};
+        const sortedHalls = Object.entries(halls).sort(function(a, b) {
+            return b[1].count - a[1].count;
+        });
+        for (const [hallName, hallData] of sortedHalls) {
+            const color = HALL_TOKENS[hallName] || 'var(--color-text-subtle)';
+            const label = HALL_LABELS[hallName] || hallName;
+
+            const row = el('tr');
+            row.addEventListener('click', function() {
+                showHallDetail(wingName, hallName, label, color);
+            });
+
+            // Cell 1: indicator + name
+            const nameCell = el('td');
+            const indicator = el('span', {cls: 'hall-indicator'});
+            indicator.style.background = color;
+            nameCell.appendChild(indicator);
+            nameCell.appendChild(el('span', {cls: 'hall-name', text: label}));
+            row.appendChild(nameCell);
+
+            // Cell 2: count
+            row.appendChild(el('td', {
+                cls: 'hall-count-cell',
+                text: (hallData.count || 0).toLocaleString(),
+            }));
+
+            // Cell 3: top 3 article titles as comma-sep inline list
+            const artCell = el('td', {cls: 'hall-articles-cell'});
+            const topArticles = (hallData.top_articles || []).slice(0, 3);
+            topArticles.forEach(function(art, i) {
+                const a = el('a', {text: art.title});
+                a.href = '/wiki/' + wingName + '/' + art.slug;
+                a.addEventListener('click', function(e) { e.stopPropagation(); });
+                artCell.appendChild(a);
+                if (i < topArticles.length - 1) {
+                    artCell.appendChild(document.createTextNode(' · '));
+                }
+            });
+            const remaining = (hallData.count || 0) - topArticles.length;
+            if (remaining > 0) {
+                artCell.appendChild(document.createTextNode(' '));
+                artCell.appendChild(el('span', {
+                    cls: 'more',
+                    text: '(+' + remaining + ' more)',
+                }));
+            }
+            row.appendChild(artCell);
+
+            tbody.appendChild(row);
+        }
+        table.appendChild(tbody);
+        wingDiv.appendChild(table);
+
+        // Rooms — plain wiki-style flow, always-readable surface
+        const rooms = wing.rooms || {};
+        const roomEntries = Object.entries(rooms)
+            .filter(function(e) { return e[0] !== '_misc'; })
+            .sort(function(a, b) { return b[1].count - a[1].count; });
+        if (roomEntries.length > 0) {
+            wingDiv.appendChild(el('div', {
+                cls: 'rooms-header',
+                text: 'Rooms · ' + roomEntries.length + ' topic clusters',
+            }));
+
+            const flow = el('div', {cls: 'rooms-flow'});
+            for (const [roomName, roomData] of roomEntries.slice(0, 60)) {
+                const dist = roomData.hall_distribution || {};
+                const dominant = Object.entries(dist).sort(function(a, b) {
+                    return b[1] - a[1];
+                })[0];
+                const roomColor = dominant ? (HALL_TOKENS[dominant[0]] || 'var(--color-text-subtle)') : 'var(--color-text-subtle)';
+
+                const item = el('span', {cls: 'room-item'});
+                item.addEventListener('click', function() {
+                    showRoomDetail(wingName, roomName, roomColor);
+                });
+
+                const dot = el('span', {cls: 'room-dot'});
+                dot.style.background = roomColor;
+                item.appendChild(dot);
+                item.appendChild(document.createTextNode(roomName || '(unnamed)'));
+                item.appendChild(el('span', {
+                    cls: 'room-count',
+                    text: '(' + roomData.count + ')',
+                }));
+                flow.appendChild(item);
+            }
+            wingDiv.appendChild(flow);
+        }
+
+        container.appendChild(wingDiv);
+    }
+
+    document.getElementById('palace-stats').textContent =
+        totalClassified.toLocaleString() + ' articles classified · ' +
+        totalRooms.toLocaleString() + ' rooms';
+}
+
+async function showHallDetail(kb, hall, label, color) {
+    const resp = await fetch('/api/palace/hall/' + kb + '/' + hall);
+    const data = await resp.json();
+
+    const detail = document.getElementById('palace-detail');
+    detail.style.display = 'block';
+    detail.style.borderLeft = '3px solid ' + color;
+
+    document.getElementById('detail-title').textContent = label + ' Hall';
+    document.getElementById('detail-subtitle').textContent =
+        kb + ' wing \u2014 ' + data.count + ' articles';
+
+    const articlesDiv = document.getElementById('detail-articles');
+    articlesDiv.innerHTML = '';
+    if (data.articles && data.articles.length > 0) {
+        const grid = el('div', {cls: 'palace-detail-grid'});
+        for (const a of data.articles) {
+            const card = el('div', {cls: 'palace-detail-card'});
+            const link = el('a', {text: a.title});
+            link.href = '/wiki/' + a.kb + '/' + a.slug;
+            card.appendChild(link);
+            const meta = el('div', {cls: 'palace-detail-meta'});
+            meta.textContent = (a.word_count || 0).toLocaleString() + ' words' +
+                (a.tags && a.tags.length > 0 ? ' \u2014 ' + a.tags.slice(0, 3).join(', ') : '');
+            card.appendChild(meta);
+            if (a.summary) {
+                card.appendChild(el('div', {cls: 'palace-detail-summary', text: a.summary}));
+            }
+            grid.appendChild(card);
+        }
+        articlesDiv.appendChild(grid);
+    } else {
+        articlesDiv.innerHTML = '<p style="color: var(--color-text-subtle);">No articles in this hall.</p>';
+    }
+    detail.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+}
+
+async function showRoomDetail(kb, roomName, color) {
+    const resp = await fetch('/api/palace/room/' + kb + '/' + encodeURIComponent(roomName));
+    const data = await resp.json();
+
+    const detail = document.getElementById('palace-detail');
+    detail.style.display = 'block';
+    detail.style.borderLeft = '3px solid ' + color;
+
+    document.getElementById('detail-title').textContent = roomName + ' Room';
+    document.getElementById('detail-subtitle').textContent =
+        kb + ' wing \u2014 ' + data.count + ' articles';
+
+    const articlesDiv = document.getElementById('detail-articles');
+    articlesDiv.innerHTML = '';
+    if (data.articles && data.articles.length > 0) {
+        const grid = el('div', {cls: 'palace-detail-grid'});
+        for (const a of data.articles) {
+            const card = el('div', {cls: 'palace-detail-card'});
+            const link = el('a', {text: a.title});
+            link.href = '/wiki/' + a.kb + '/' + a.slug;
+            card.appendChild(link);
+            if (a.hall) {
+                const badge = el('span', {
+                    cls: 'palace-detail-hall-badge',
+                    text: HALL_LABELS[a.hall] || a.hall,
+                });
+                badge.style.color = HALL_TOKENS[a.hall] || 'var(--color-text-subtle)';
+                card.appendChild(badge);
+            }
+            card.appendChild(el('div', {
+                cls: 'palace-detail-meta',
+                text: (a.word_count || 0).toLocaleString() + ' words',
+            }));
+            grid.appendChild(card);
+        }
+        articlesDiv.appendChild(grid);
+    } else {
+        articlesDiv.innerHTML = '<p style="color: var(--color-text-subtle);">No articles in this room.</p>';
+    }
+    detail.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+}
+
+async function buildPalace() {
+    document.getElementById('palace-stats').textContent = 'Classifying articles\u2026';
+    try {
+        const mapResp = await fetch('/api/palace/map');
+        const mapData = await mapResp.json();
+        const wings = Object.keys(mapData.wings || {});
+        for (const kb of wings) {
+            await fetch('/api/palace/classify', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({kb}),
+            });
+        }
+        for (const kb of wings) {
+            await fetch('/api/palace/cluster', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({kb}),
+            });
+        }
+        document.getElementById('palace-stats').textContent =
+            'Palace build queued. Refresh in a few seconds.';
+        setTimeout(loadPalace, 5000);
+    } catch (err) {
+        document.getElementById('palace-stats').textContent = 'Error: ' + err.message;
+    }
+}
+
+loadPalace();
+</script>
+{% endblock %}

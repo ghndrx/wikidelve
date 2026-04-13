@@ -1,0 +1,669 @@
+{% extends "base.html" %}
+{% block title %}Research{% endblock %}
+
+{% block styles %}
+<style nonce="{{ csp_nonce() }}">
+    .chat-container {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 180px);
+        min-height: 400px;
+    }
+    .chat-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0 0 16px;
+    }
+    .chat-input-bar {
+        display: flex;
+        gap: 6px;
+        padding: 10px 0 0;
+        border-top: 1px solid var(--color-border-light);
+        position: sticky;
+        bottom: 0;
+        background: var(--color-surface);
+        flex-wrap: wrap;
+    }
+    .chat-input-row {
+        display: flex;
+        gap: 6px;
+        flex: 1;
+        min-width: 0;
+    }
+    .chat-input-bar input[type="text"] {
+        flex: 1;
+        font-family: inherit;
+        font-size: 14px;
+        padding: 10px 14px;
+        border: 2px solid var(--color-border);
+        background: var(--color-surface);
+        color: var(--color-text);
+        outline: none;
+        border-radius: 0;
+        min-width: 0;
+    }
+    .chat-input-bar input[type="text"]:focus {
+        border-color: var(--color-border-accent);
+    }
+    .chat-input-bar input::placeholder {
+        color: var(--color-text-subtle);
+    }
+    .chat-input-bar button {
+        font-family: inherit;
+        font-size: 14px;
+        padding: 10px 20px;
+        border: 2px solid var(--color-primary);
+        background: var(--color-primary);
+        color: #fff;
+        cursor: pointer;
+        font-weight: bold;
+        border-radius: 0;
+        white-space: nowrap;
+    }
+    .chat-input-bar button:hover { background: var(--color-primary-hover); border-color: var(--color-primary-hover); }
+    .chat-input-bar button:disabled { background: var(--color-border); border-color: var(--color-border); cursor: default; }
+    .kb-select {
+        font-family: inherit;
+        font-size: 12px;
+        padding: 4px 8px;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface-alt);
+        outline: none;
+        border-radius: 0;
+        color: var(--color-text-muted);
+    }
+    .kb-select:focus { border-color: var(--color-border-accent); }
+    .kb-bar {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        font-size: 12px;
+        color: var(--color-text-subtle);
+        padding-top: 4px;
+    }
+    .kb-bar label { white-space: nowrap; }
+
+    /* Messages */
+    .msg {
+        margin: 12px 0;
+        max-width: 85%;
+        animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .msg.user {
+        margin-left: auto;
+        text-align: right;
+    }
+    .msg-bubble {
+        display: inline-block;
+        text-align: left;
+        padding: 10px 14px;
+        font-size: 14px;
+        line-height: 1.5;
+        border-radius: var(--radius-md);
+    }
+    .msg.user .msg-bubble {
+        background: var(--color-primary);
+        color: #fff;
+    }
+    .msg.user .msg-bubble a { color: #a7d7f9; }
+    .msg.ai .msg-bubble {
+        background: var(--color-surface-alt);
+        border: 1px solid var(--color-border-light);
+        color: var(--color-text);
+    }
+    .msg.ai .msg-bubble a { color: var(--color-link); }
+
+    /* Thinking steps */
+    .thinking {
+        font-size: 13px;
+        color: var(--color-text-muted);
+        padding: 6px 0 2px;
+    }
+    .thinking-step {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 0;
+        animation: fadeIn 0.3s ease;
+    }
+    .thinking-step .dot {
+        width: 8px; height: 8px; flex-shrink: 0;
+    }
+    .thinking-step .dot.active { background: var(--color-warning); animation: pulse 1s infinite; }
+    .thinking-step .dot.done { background: var(--color-success); }
+    .thinking-step .dot.error { background: var(--color-error); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    /* Article cards */
+    .article-card {
+        display: block;
+        border: 1px solid var(--color-border-light);
+        padding: 10px 14px;
+        margin: 6px 0;
+        background: var(--color-surface);
+        text-decoration: none;
+        color: inherit;
+        transition: border-color 0.15s;
+    }
+    .article-card:hover { border-color: var(--color-primary); text-decoration: none; }
+    .article-card .card-title { font-weight: bold; color: var(--color-link); font-size: 14px; }
+    .article-card .card-meta { font-size: 12px; color: var(--color-text-subtle); margin-top: 2px; }
+
+    /* History sidebar */
+    .history-item {
+        display: block;
+        padding: 4px 0;
+        font-size: 13px;
+        color: var(--color-link);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .history-item .h-dot {
+        display: inline-block; width: 6px; height: 6px; margin-right: 4px; vertical-align: middle;
+    }
+    .history-item .h-dot.green  { background: var(--color-success); }
+    .history-item .h-dot.red    { background: var(--color-error); }
+    .history-item .h-dot.yellow { background: var(--color-warning); }
+    .history-item .h-dot.gray   { background: var(--color-text-subtle); }
+
+    /* Welcome state */
+    .welcome {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--color-text-subtle);
+    }
+    .welcome h2 { font-size: 22px; color: var(--color-text-strong); font-weight: normal; margin-bottom: 8px; font-family: var(--font-serif); }
+    .welcome p { font-size: 14px; max-width: 500px; margin: 0 auto 16px; }
+    .suggestions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 12px; }
+    .suggestion {
+        font-size: 13px; padding: 5px 12px; border: 1px solid var(--color-border);
+        background: var(--color-surface-alt); color: var(--color-text); cursor: pointer; font-family: inherit;
+    }
+    .suggestion:hover { background: var(--color-surface-hover); border-color: var(--color-primary); }
+
+    /* Mobile */
+    @media (max-width: 768px) {
+        .chat-container { height: calc(100vh - 140px); height: calc(100dvh - 140px); }
+        .msg { max-width: 95%; }
+        .msg-bubble { padding: 8px 10px; font-size: 13px; }
+        .chat-input-bar button { padding: 10px 14px; }
+        .welcome { padding: 30px 10px; }
+        .welcome h2 { font-size: 18px; }
+        .suggestions { gap: 4px; }
+        .suggestion { font-size: 12px; padding: 4px 8px; }
+    }
+</style>
+{% endblock %}
+
+{% block sidebar %}
+<div class="sidebar-section">
+    <div class="sidebar-heading">Recent Research</div>
+    <ul class="sidebar-list" id="history-list">
+        {% for job in jobs[:15] %}
+        <li>
+            <a class="history-item" href="#" onclick="event.preventDefault(); showJobInChat({{ job.id }});" title="{{ job.topic | e }}">
+                <span class="h-dot {% if job.status == 'complete' %}green{% elif job.status == 'error' %}red{% elif job.status in ['queued','searching','synthesizing'] %}yellow{% else %}gray{% endif %}"></span>
+                {{ job.topic | default('Unknown') | truncate(35) | e }}
+            </a>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="chat-container">
+    <div class="chat-messages" id="chat">
+        <div class="welcome" id="welcome">
+            <h2>Research Assistant</h2>
+            <p>Ask me to research anything. I'll search the web, read sources, synthesize findings, and add articles to your knowledge base. Select a KB below or create a new one.</p>
+            <div class="suggestions">
+                <button class="suggestion" onclick="sendMessage('Kubernetes Gateway API vs Ingress Controllers')">K8s Gateway API vs Ingress</button>
+                <button class="suggestion" onclick="sendMessage('Rust vs Go for backend services 2026')">Rust vs Go backends</button>
+                <button class="suggestion" onclick="sendMessage('best practices for PostgreSQL performance tuning')">Postgres perf tuning</button>
+                <button class="suggestion" onclick="sendMessage('WebAssembly component model and WASI preview 2')">WASM components</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="chat-input-bar">
+        <div class="chat-input-row">
+            <input type="text" id="msg-input" placeholder="What would you like to research?" autofocus />
+            <button id="send-btn" onclick="sendFromInput()">Research</button>
+        </div>
+        <div class="kb-bar">
+            <label for="kb-select">KB:</label>
+            <select id="kb-select" class="kb-select">
+                {% for kb_name in kb_names %}
+                <option value="{{ kb_name | e }}">{{ kb_name | e }}</option>
+                {% endfor %}
+            </select>
+            <span style="color: var(--color-border);">|</span>
+            <a href="#" onclick="event.preventDefault();promptNewKb();" style="font-size:12px;">+ New KB</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+var chatEl = document.getElementById('chat');
+var inputEl = document.getElementById('msg-input');
+var sendBtn = document.getElementById('send-btn');
+var welcomeEl = document.getElementById('welcome');
+var kbSelect = document.getElementById('kb-select');
+var activePolls = {};
+
+// Enter submits; Shift+Enter preserved as a noop (single-line input).
+if (inputEl) {
+    inputEl.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendFromInput();
+        }
+    });
+}
+
+// Preload job data from server
+var jobCache = {};
+{% for job in jobs %}
+jobCache[{{ job.id }}] = {{ job | tojson }};
+{% endfor %}
+
+function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function scrollBottom() { chatEl.scrollTop = chatEl.scrollHeight; }
+
+function hideWelcome() { if (welcomeEl) { welcomeEl.style.display = 'none'; } }
+
+function addMsg(side, html) {
+    hideWelcome();
+    var div = document.createElement('div');
+    div.className = 'msg ' + side;
+    div.innerHTML = '<div class="msg-bubble">' + html + '</div>';
+    chatEl.appendChild(div);
+    scrollBottom();
+    return div;
+}
+
+function addThinking(jobId) {
+    hideWelcome();
+    var div = document.createElement('div');
+    div.className = 'msg ai';
+    div.id = 'thinking-' + jobId;
+    div.innerHTML = '<div class="msg-bubble thinking"></div>';
+    chatEl.appendChild(div);
+    scrollBottom();
+    return div;
+}
+
+function addStep(jobId, text, state) {
+    var container = document.querySelector('#thinking-' + jobId + ' .thinking');
+    if (!container) return;
+    // Update last step if it was active
+    var steps = container.querySelectorAll('.thinking-step');
+    if (steps.length > 0) {
+        var lastDot = steps[steps.length - 1].querySelector('.dot');
+        if (lastDot && lastDot.classList.contains('active')) {
+            lastDot.classList.remove('active');
+            lastDot.classList.add('done');
+        }
+    }
+    var step = document.createElement('div');
+    step.className = 'thinking-step';
+    step.innerHTML = '<span class="dot ' + (state || 'active') + '"></span>' + esc(text);
+    container.appendChild(step);
+    scrollBottom();
+}
+
+function finishThinking(jobId) {
+    var container = document.querySelector('#thinking-' + jobId + ' .thinking');
+    if (!container) return;
+    var dots = container.querySelectorAll('.dot.active');
+    dots.forEach(function(d) { d.classList.remove('active'); d.classList.add('done'); });
+}
+
+var statusLabels = {
+    'queued': 'Queued — waiting for a worker...',
+    'searching': 'Searching the web for sources...',
+    'searching_round_1': 'Deep search — round 1...',
+    'searching_round_2': 'Deep search — round 2...',
+    'searching_round_3': 'Deep search — round 3...',
+    'reading_pages': 'Reading and extracting page content...',
+    'browser_reading': 'Browser reading pages...',
+    'downloading_docs': 'Downloading documents...',
+    'synthesizing': 'Synthesizing research article...',
+    'writing': 'Writing to knowledge base...',
+    'complete': 'Research complete',
+    'error': 'Research failed',
+    'no_results': 'No results found',
+    'cancelled': 'Cancelled',
+};
+
+function sendFromInput() {
+    var text = inputEl.value.trim();
+    if (!text) return;
+    inputEl.value = '';
+
+    // Handle NL commands
+    var cmd = parseCommand(text);
+    if (cmd) {
+        runCommand(cmd, text);
+        return;
+    }
+
+    // Parse "in <kb>" or "to <kb>" suffix to override KB selector
+    var kb = kbSelect.value;
+    var kbMatch = text.match(/\s+(?:in|to|for)\s+(?:kb|knowledge\s*base)?\s*["']?([a-zA-Z0-9-]+)["']?\s*$/i);
+    if (kbMatch) {
+        kb = kbMatch[1].toLowerCase();
+        text = text.substring(0, text.length - kbMatch[0].length).trim();
+    }
+
+    sendMessage(text, kb);
+}
+
+async function promptNewKb() {
+    hideWelcome();
+    addMsg('ai', 'What would you like to name the new knowledge base?<br><span style="font-size:12px;color: var(--color-text-subtle);">Type: <code>create kb my-kb-name</code></span>');
+    inputEl.value = 'create kb ';
+    inputEl.focus();
+}
+
+async function createNewKb(name) {
+    addMsg('user', 'Create KB: ' + esc(name));
+    try {
+        var resp = await fetch('/api/kbs', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name: name})
+        });
+        var data = await resp.json();
+        if (resp.ok) {
+            // Add to dropdown and select it
+            var opt = document.createElement('option');
+            opt.value = data.name;
+            opt.textContent = data.name;
+            kbSelect.appendChild(opt);
+            kbSelect.value = data.name;
+            addMsg('ai', 'Created knowledge base <b>' + esc(data.name) + '</b>. It\'s now selected — any research you start will go there.');
+        } else {
+            addMsg('ai', '<span style="color: var(--color-error);">' + esc(data.detail || 'Failed to create KB.') + '</span>');
+        }
+    } catch (e) {
+        addMsg('ai', '<span style="color: var(--color-error);">Error: ' + esc(e.message) + '</span>');
+    }
+    inputEl.focus();
+}
+
+async function sendMessage(topic, kb) {
+    kb = kb || kbSelect.value || 'personal';
+    var display = esc(topic);
+    if (kb !== 'personal') display += ' <span style="font-size:11px;color:rgba(255,255,255,0.7);"> → ' + esc(kb) + '</span>';
+    addMsg('user', display);
+    sendBtn.disabled = true;
+    inputEl.disabled = true;
+
+    try {
+        var resp = await fetch('/api/research', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({topic: topic, kb: kb})
+        });
+        var data = await resp.json();
+
+        if (!resp.ok) {
+            if (resp.status === 429 && data.existing_job_id) {
+                addMsg('ai', 'I researched this recently. Let me show you what I found.');
+                showJobResult(data.existing_job_id);
+            } else {
+                addMsg('ai', '<span style="color: var(--color-error);">' + esc(data.detail || 'Something went wrong.') + '</span>');
+            }
+            sendBtn.disabled = false;
+            inputEl.disabled = false;
+            return;
+        }
+
+        var jobId = data.job_id;
+        addThinking(jobId);
+        addStep(jobId, 'Research started — job #' + jobId + ' → ' + esc(data.kb || kb));
+        pollJob(jobId);
+
+    } catch (e) {
+        addMsg('ai', '<span style="color: var(--color-error);">Network error: ' + esc(e.message) + '</span>');
+        sendBtn.disabled = false;
+        inputEl.disabled = false;
+    }
+}
+
+function pollJob(jobId) {
+    var lastStatus = '';
+    var interval = setInterval(async function() {
+        try {
+            var r = await fetch('/api/research/status/' + jobId);
+            if (!r.ok) { clearInterval(interval); return; }
+            var job = await r.json();
+            jobCache[jobId] = job;
+
+            if (job.status !== lastStatus) {
+                lastStatus = job.status;
+                var label = statusLabels[job.status] || job.status;
+                if (job.status === 'error' || job.status === 'no_results') {
+                    addStep(jobId, label, 'error');
+                } else if (job.status === 'complete') {
+                    addStep(jobId, label, 'done');
+                } else {
+                    addStep(jobId, label);
+                }
+
+                if (job.sources && job.status !== 'queued') {
+                    // Show source count on first search update
+                    var existing = document.querySelector('#thinking-' + jobId + ' [data-sources]');
+                    if (!existing) {
+                        var srcStep = document.createElement('div');
+                        srcStep.className = 'thinking-step';
+                        srcStep.setAttribute('data-sources', 'true');
+                        srcStep.innerHTML = '<span class="dot done"></span>Found ' + job.sources + ' sources';
+                        var container = document.querySelector('#thinking-' + jobId + ' .thinking');
+                        if (container) container.appendChild(srcStep);
+                    }
+                }
+            }
+
+            if (['complete', 'error', 'no_results', 'cancelled'].indexOf(job.status) !== -1) {
+                clearInterval(interval);
+                finishThinking(jobId);
+
+                if (job.status === 'complete') {
+                    showJobComplete(job);
+                } else if (job.status === 'error') {
+                    addMsg('ai', '<span style="color: var(--color-error);">Error: ' + esc(job.error || 'Unknown error') + '</span><br><br>You can try rephrasing your query or try again later.');
+                }
+
+                sendBtn.disabled = false;
+                inputEl.disabled = false;
+                inputEl.focus();
+            }
+        } catch (e) {
+            clearInterval(interval);
+            sendBtn.disabled = false;
+            inputEl.disabled = false;
+        }
+    }, 2000);
+}
+
+function showJobComplete(job) {
+    var html = '';
+
+    // Summary from content
+    if (job.content) {
+        var lines = job.content.split('\n');
+        // Extract executive summary
+        var summary = '';
+        var inSummary = false;
+        for (var i = 0; i < lines.length && i < 30; i++) {
+            var line = lines[i].trim();
+            if (line.match(/^##\s*executive summary/i)) { inSummary = true; continue; }
+            if (inSummary && line.match(/^##\s/)) break;
+            if (inSummary && line && !line.startsWith('#') && !line.startsWith('---') && !line.startsWith('**Note')) {
+                summary += line + ' ';
+            }
+        }
+        if (!summary) {
+            // Fallback: first meaningful paragraph
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i].trim();
+                if (line && !line.startsWith('#') && !line.startsWith('---') && !line.startsWith('|') && line.length > 50) {
+                    summary = line;
+                    break;
+                }
+            }
+        }
+        if (summary) {
+            html += '<p>' + esc(summary.trim().substring(0, 500)) + '</p>';
+        }
+    }
+
+    // Stats
+    html += '<p style="font-size:12px;color: var(--color-text-subtle);margin:8px 0 4px;">';
+    if (job.sources) html += job.sources + ' sources';
+    if (job.word_count) html += ' · ' + job.word_count.toLocaleString() + ' words';
+    html += '</p>';
+
+    // Article link
+    if (job.wiki_slug) {
+        var kb = job.wiki_kb || 'personal';
+        html += '<a class="article-card" href="/wiki/' + esc(kb) + '/' + esc(job.wiki_slug) + '">' +
+            '<div class="card-title">' + esc(job.topic) + '</div>' +
+            '<div class="card-meta">Added to ' + esc(kb) + ' knowledge base — click to read full article</div>' +
+            '</a>';
+    }
+
+    html += '<p style="font-size:13px;color: var(--color-text-muted);margin-top:10px;">Want to dig deeper? Just send another message.</p>';
+
+    addMsg('ai', html);
+    scrollBottom();
+}
+
+async function showJobResult(jobId) {
+    var job = jobCache[jobId];
+    if (!job || !job.content) {
+        try {
+            var r = await fetch('/api/research/status/' + jobId);
+            if (r.ok) job = await r.json();
+            jobCache[jobId] = job;
+        } catch (e) {}
+    }
+    if (job && job.status === 'complete') {
+        showJobComplete(job);
+    } else if (job) {
+        addMsg('ai', 'Job #' + jobId + ' — <span class="status-label ' + (job.status||'queued') + '">' + esc(job.status||'unknown') + '</span>');
+        if (job.status && ['queued','searching','synthesizing','searching_round_1','searching_round_2'].indexOf(job.status) !== -1) {
+            addThinking(jobId);
+            addStep(jobId, statusLabels[job.status] || job.status);
+            pollJob(jobId);
+        }
+    }
+}
+
+function showJobInChat(jobId) {
+    var job = jobCache[jobId];
+    if (job) {
+        hideWelcome();
+        addMsg('user', esc(job.topic));
+        if (job.status === 'complete') {
+            showJobComplete(job);
+        } else {
+            showJobResult(jobId);
+        }
+    } else {
+        showJobResult(jobId);
+    }
+    inputEl.focus();
+}
+
+// NL command parsing (reuses same logic as the floating chat)
+function parseCommand(text) {
+    var t = text.toLowerCase().trim();
+    var m;
+    m = t.match(/^(?:create|new|add)\s+(?:a\s+)?(?:new\s+)?(?:kb|knowledge\s*base)\s+(?:called\s+|named\s+|for\s+)?["']?([a-z0-9-]+)/);
+    if (m) return {action: 'create_kb', name: m[1]};
+    if (t.match(/^(?:list|show|what)\s+(?:are\s+)?(?:my\s+)?(?:kbs|knowledge\s*bases)/)) return {action: 'list_kbs'};
+    if (t.match(/^(?:stats|status|how\s+(?:many|much)|dashboard)/)) return {action: 'stats'};
+    if (t.match(/^(?:reindex|rebuild\s+(?:search|index))/)) return {action: 'reindex'};
+    if (t.match(/^(?:build|rebuild)\s+(?:embeddings|vectors)/)) return {action: 'build_embeddings'};
+    if (t.match(/^(?:build|rebuild)\s+(?:knowledge\s+)?graph/)) return {action: 'build_graph'};
+    m = t.match(/^(?:quality|scores|health)\s+(?:for\s+)?(\w+)/);
+    if (m) return {action: 'quality', kb: m[1]};
+    if (t.match(/^(?:quality|scores|health)$/)) return {action: 'quality', kb: 'personal'};
+    if (t.match(/^(?:jobs|research\s+jobs|recent\s+research)/)) return {action: 'list_jobs'};
+    m = t.match(/^(?:refine|fix|clean)\s+(?:titles?|names?)(?:\s+(?:for|in)\s+(\w+))?/);
+    if (m) return {action: 'refine_titles', kb: m[1] || 'personal'};
+    if (t.match(/^(?:help|what\s+can\s+you\s+do|commands)/)) return {action: 'help'};
+    return null;
+}
+
+async function runCommand(cmd, original) {
+    addMsg('user', esc(original));
+    try {
+        if (cmd.action === 'create_kb') {
+            var r = await fetch('/api/kbs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:cmd.name})});
+            var d = await r.json();
+            if (r.ok) {
+                var opt = document.createElement('option');
+                opt.value = d.name; opt.textContent = d.name;
+                kbSelect.appendChild(opt); kbSelect.value = d.name;
+                addMsg('ai', 'Created KB <b>' + esc(d.name) + '</b>. Selected as target for new research.');
+            } else addMsg('ai', '<span style="color: var(--color-error);">' + esc(d.detail) + '</span>');
+        } else if (cmd.action === 'list_kbs') {
+            var r = await fetch('/api/kbs'); var kbs = await r.json();
+            var h = '<b>Knowledge Bases:</b><br>';
+            kbs.forEach(function(kb) { h += '&bull; <b>' + esc(kb.name) + '</b> — ' + kb.articles + ' articles, ' + kb.words.toLocaleString() + ' words<br>'; });
+            addMsg('ai', h);
+        } else if (cmd.action === 'stats') {
+            var r = await fetch('/api/status'); var s = await r.json();
+            addMsg('ai', '<b>System Status:</b><br>Articles: ' + s.wiki.total_articles + '<br>Words: ' + s.wiki.total_words.toLocaleString() + '<br>Jobs: ' + s.jobs.total + ' (' + s.jobs.complete + ' complete, ' + s.jobs.active + ' active)<br>' + (s.grokmaxxing ? '<span style="color: var(--color-success);">Workers active</span>' : '<span style="color: var(--color-text-subtle);">Workers idle</span>'));
+        } else if (cmd.action === 'reindex') {
+            var r = await fetch('/api/search/reindex', {method:'POST'}); var d = await r.json();
+            addMsg('ai', 'Search index rebuilt — ' + (d.articles||0) + ' articles indexed.');
+        } else if (cmd.action === 'build_embeddings') {
+            await fetch('/api/embeddings/build', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}); addMsg('ai', 'Embedding build queued.');
+        } else if (cmd.action === 'build_graph') {
+            await fetch('/api/graph/build', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}); addMsg('ai', 'Knowledge graph build queued.');
+        } else if (cmd.action === 'quality') {
+            var r = await fetch('/api/quality/scores/' + encodeURIComponent(cmd.kb)); var d = await r.json();
+            addMsg('ai', '<b>Quality — ' + esc(d.kb) + ':</b><br>Average: ' + d.average_score + '/100<br>Articles: ' + d.total_articles + '<br>Excellent: ' + (d.distribution['excellent (80-100)']||0) + ', Good: ' + (d.distribution['good (60-79)']||0) + ', Fair: ' + (d.distribution['fair (40-59)']||0));
+        } else if (cmd.action === 'list_jobs') {
+            var r = await fetch('/api/research/jobs'); var jobs = await r.json();
+            var h = '<b>Recent Research:</b><br>';
+            jobs.slice(0,10).forEach(function(j) {
+                h += '&bull; ' + esc(j.topic.substring(0,60)) + ' — <span class="status-label ' + j.status + '">' + j.status + '</span>';
+                if (j.wiki_slug) h += ' <a href="/wiki/' + esc(j.wiki_kb||'personal') + '/' + esc(j.wiki_slug) + '">→ article</a>';
+                h += '<br>';
+            });
+            addMsg('ai', h);
+        } else if (cmd.action === 'refine_titles') {
+            var r = await fetch('/api/articles/refine-titles', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({kb:cmd.kb})});
+            var d = await r.json();
+            var h = '<b>Refined ' + d.updated + ' titles</b> in ' + esc(d.kb) + ' (' + d.total + ' total)<br>';
+            d.changes.slice(0,10).forEach(function(c) { h += '&bull; ' + esc(c.old_title.substring(0,50)) + ' → <b>' + esc(c.new_title.substring(0,50)) + '</b><br>'; });
+            if (d.updated === 0) h += '<span style="color: var(--color-text-subtle);">All titles already look clean.</span>';
+            addMsg('ai', h);
+        } else if (cmd.action === 'help') {
+            addMsg('ai', '<b>Commands:</b><br>&bull; Type any topic to research it<br>&bull; <b>create kb &lt;name&gt;</b><br>&bull; <b>list kbs</b><br>&bull; <b>stats</b><br>&bull; <b>quality [kb]</b><br>&bull; <b>jobs</b><br>&bull; <b>reindex</b><br>&bull; <b>build embeddings</b> / <b>build graph</b><br>&bull; <b>refine titles [kb]</b> — fix prompt-style titles<br>&bull; Append <b>in &lt;kb&gt;</b> to target a specific KB');
+        }
+    } catch (e) {
+        addMsg('ai', '<span style="color: var(--color-error);">Error: ' + esc(e.message) + '</span>');
+    }
+}
+
+// If there's a hash with a job id, show it
+(function() {
+    var m = window.location.hash.match(/job-(\d+)/);
+    if (m) showJobInChat(parseInt(m[1]));
+})();
+</script>
+{% endblock %}

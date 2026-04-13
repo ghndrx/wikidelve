@@ -1,0 +1,1335 @@
+{% extends "base.html" %}
+{% block title %}API Documentation{% endblock %}
+
+{% block sidebar %}
+<div class="sidebar-section">
+    <div class="sidebar-heading">API Docs</div>
+    <ul class="sidebar-list">
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#articles">Articles</a></li>
+        <li><a href="#search">Search</a></li>
+        <li><a href="#research">Research</a></li>
+        <li><a href="#quality">Quality</a></li>
+        <li><a href="#graph">Knowledge Graph</a></li>
+        <li><a href="#palace">Palace</a></li>
+        <li><a href="#ingest">Ingest</a></li>
+        <li><a href="#github">GitHub</a></li>
+        <li><a href="#system">System</a></li>
+    </ul>
+</div>
+{% endblock %}
+
+{% block styles %}
+<style nonce="{{ csp_nonce() }}">
+    .endpoint {
+        border: 1px solid var(--color-border);
+        margin: 12px 0;
+        background: var(--color-surface);
+    }
+    .endpoint-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        background: var(--color-surface-alt);
+        border-bottom: 1px solid var(--color-border-light);
+        cursor: pointer;
+        user-select: none;
+    }
+    .endpoint-header:hover {
+        background: var(--color-surface-hover);
+    }
+    .method {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        font-weight: bold;
+        padding: 2px 8px;
+        min-width: 60px;
+        text-align: center;
+        color: #fff;
+    }
+    .method.get    { background: var(--color-success); }
+    .method.post   { background: var(--color-primary); }
+    .method.delete { background: var(--color-error); }
+    .endpoint-path {
+        font-family: var(--font-mono);
+        font-size: 13px;
+        color: var(--color-text);
+        flex: 1;
+    }
+    .endpoint-desc {
+        font-size: 12px;
+        color: var(--color-text-muted);
+    }
+    .endpoint-body {
+        display: none;
+        padding: 12px 16px;
+        border-top: 1px solid var(--color-border-light);
+        color: var(--color-text);
+    }
+    .endpoint-body.open {
+        display: block;
+    }
+    .endpoint-body h4 {
+        font-size: 13px;
+        font-weight: bold;
+        color: var(--color-text-muted);
+        margin: 12px 0 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .endpoint-body h4:first-child {
+        margin-top: 0;
+    }
+    .endpoint-body pre {
+        background: var(--color-surface-alt);
+        border: 1px solid var(--color-border-light);
+        padding: 10px 12px;
+        overflow-x: auto;
+        font-size: 13px;
+        margin: 4px 0 8px;
+        color: var(--color-text);
+        font-family: var(--font-mono);
+    }
+    .endpoint-body code {
+        font-family: var(--font-mono);
+        font-size: 13px;
+        color: var(--color-text);
+    }
+    .endpoint-body :not(pre) > code {
+        background: var(--color-surface-alt);
+        border: 1px solid var(--color-border-light);
+        padding: 1px 4px;
+    }
+    .param-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        margin: 4px 0 8px;
+        color: var(--color-text);
+    }
+    .param-table th {
+        text-align: left;
+        padding: 4px 8px;
+        background: var(--color-surface-hover);
+        border: 1px solid var(--color-border);
+        font-size: 12px;
+        color: var(--color-text);
+    }
+    .param-table td {
+        padding: 4px 8px;
+        border: 1px solid var(--color-border);
+        vertical-align: top;
+        color: var(--color-text);
+    }
+    .param-table .param-name {
+        font-family: var(--font-mono);
+        font-weight: bold;
+        white-space: nowrap;
+    }
+    .param-table .param-type {
+        font-family: var(--font-mono);
+        color: var(--color-link);
+        font-size: 12px;
+        white-space: nowrap;
+    }
+    .param-table .param-required {
+        color: var(--color-error);
+        font-size: 11px;
+    }
+    .param-table .param-optional {
+        color: var(--color-text-subtle);
+        font-size: 11px;
+    }
+    .status-code {
+        font-family: var(--font-mono);
+        font-weight: bold;
+        margin-right: 6px;
+    }
+    .status-code.s2xx { color: var(--color-success); }
+    .status-code.s4xx { color: var(--color-error); }
+    .status-code.s429 { color: var(--color-warning); }
+    .try-it {
+        margin-top: 8px;
+    }
+    .try-it button {
+        font-family: inherit;
+        font-size: 12px;
+        padding: 3px 10px;
+        border: 1px solid var(--color-primary);
+        background: var(--color-primary);
+        color: #fff;
+        cursor: pointer;
+    }
+    .try-it button:hover {
+        background: var(--color-primary-hover);
+    }
+    .try-it button:disabled {
+        background: var(--color-border);
+        border-color: var(--color-border);
+        cursor: default;
+    }
+    .try-it-result {
+        margin-top: 6px;
+        display: none;
+    }
+    .try-it-result pre {
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    .section-intro {
+        font-size: 14px;
+        color: var(--color-text-muted);
+        margin-bottom: 12px;
+    }
+    .base-url-box {
+        background: var(--color-surface-alt);
+        border: 1px solid var(--color-border);
+        border-left: 3px solid var(--color-border-accent);
+        padding: 10px 14px;
+        font-size: 13px;
+        margin-bottom: 16px;
+        color: var(--color-text);
+    }
+    .base-url-box code {
+        font-family: var(--font-mono);
+        font-weight: bold;
+        color: var(--color-text-strong);
+        background: var(--color-surface);
+        border: 1px solid var(--color-border-light);
+        padding: 1px 6px;
+    }
+    .base-url-note {
+        display: block;
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--color-text-muted);
+    }
+    .expand-toggle {
+        font-size: 12px;
+        color: var(--color-link);
+        cursor: pointer;
+        float: right;
+        border: none;
+        background: none;
+        font-family: inherit;
+    }
+    .expand-toggle:hover {
+        text-decoration: underline;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="page-title">API Documentation</h1>
+<p class="section-intro">Complete reference for the WikiDelve REST API. All endpoints accept and return JSON unless noted otherwise.</p>
+
+<div class="base-url-box">
+    <strong>Base URL:</strong> <code id="base-url"></code>
+    <span class="base-url-note">All endpoints are unauthenticated. Content-Type for POST requests: <code>application/json</code></span>
+</div>
+
+<!-- Overview -->
+<h2 class="section-heading" id="overview">Overview</h2>
+<div class="article-content">
+    <p>The API is organized into sections:</p>
+    <ul>
+        <li><strong>Articles</strong> &mdash; CRUD operations on wiki articles across knowledge bases</li>
+        <li><strong>Search</strong> &mdash; Full-text search (FTS5) and hybrid vector+graph search</li>
+        <li><strong>Research</strong> &mdash; Trigger AI research jobs, track progress, manage history</li>
+        <li><strong>Quality</strong> &mdash; Article scoring, enrichment, crosslinking, fact-checking, freshness audits</li>
+        <li><strong>Knowledge Graph</strong> &mdash; Entity graph data, relationship traversal</li>
+        <li><strong>Palace</strong> &mdash; Topic clustering and memory palace navigation</li>
+        <li><strong>Ingest</strong> &mdash; Import from YouTube, PDFs, ePubs, and web directories</li>
+        <li><strong>GitHub</strong> &mdash; Track releases and index repositories</li>
+        <li><strong>System</strong> &mdash; Health checks and statistics</li>
+    </ul>
+    <p>Async operations (research, quality, ingest) return a <code>{"status": "queued"}</code> response and process in the background via worker queue. Poll status endpoints to track progress.</p>
+</div>
+
+<!-- Articles -->
+<h2 class="section-heading" id="articles">
+    Articles
+    <button class="expand-toggle" onclick="toggleSection(this)">expand all</button>
+</h2>
+<p class="section-intro">Read, list, and delete wiki articles stored in markdown knowledge bases.</p>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/articles</span>
+        <span class="endpoint-desc">List all articles</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Query Parameters</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Filter by knowledge base name (e.g. <code>personal</code>, <code>research</code>)</td></tr>
+            <tr><td class="param-name">source</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Filter by source type: <code>local</code>, <code>web</code>, <code>media</code></td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">[
+  {
+    "slug": "kubernetes-networking",
+    "title": "Kubernetes Networking",
+    "kb": "personal",
+    "summary": "Overview of CNI plugins and service mesh...",
+    "tags": ["kubernetes", "networking"],
+    "word_count": 1420,
+    "source_type": "web",
+    "created": "2026-04-01T12:00:00Z"
+  }
+]</code></pre>
+        <h4>Example</h4>
+        <pre><code class="language-bash">curl "/api/articles?kb=personal&source=web"</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/api/articles?kb=personal')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/articles/{kb_name}/{slug}</span>
+        <span class="endpoint-desc">Get a single article with full content</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Path Parameters</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb_name</td><td class="param-type">string <span class="param-required">required</span></td><td>Knowledge base name</td></tr>
+            <tr><td class="param-name">slug</td><td class="param-type">string <span class="param-required">required</span></td><td>Article slug (URL-safe identifier)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "slug": "kubernetes-networking",
+  "title": "Kubernetes Networking",
+  "kb": "personal",
+  "summary": "...",
+  "tags": ["kubernetes", "networking"],
+  "word_count": 1420,
+  "html": "&lt;h2&gt;Overview&lt;/h2&gt;&lt;p&gt;...",
+  "raw_markdown": "## Overview\n...",
+  "source_type": "web",
+  "created": "2026-04-01T12:00:00Z"
+}</code></pre>
+        <h4>Errors</h4>
+        <p><span class="status-code s4xx">404</span> Article not found</p>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/articles/{kb_name}/{slug}/related</span>
+        <span class="endpoint-desc">Find related articles via tags and wikilinks</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Path Parameters</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb_name</td><td class="param-type">string <span class="param-required">required</span></td><td>Knowledge base name</td></tr>
+            <tr><td class="param-name">slug</td><td class="param-type">string <span class="param-required">required</span></td><td>Article slug</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "article": "kubernetes-networking",
+  "related": [
+    {
+      "slug": "service-mesh-comparison",
+      "title": "Service Mesh Comparison",
+      "score": 13,
+      "reasons": ["tags: kubernetes", "linked from this article"],
+      "tags": ["kubernetes", "istio"]
+    }
+  ]
+}</code></pre>
+        <h4>Errors</h4>
+        <p><span class="status-code s4xx">404</span> Article not found</p>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method delete">DELETE</span>
+        <span class="endpoint-path">/api/articles/{kb_name}/{slug}</span>
+        <span class="endpoint-desc">Delete an article and its embeddings</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Path Parameters</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb_name</td><td class="param-type">string <span class="param-required">required</span></td><td>Knowledge base name</td></tr>
+            <tr><td class="param-name">slug</td><td class="param-type">string <span class="param-required">required</span></td><td>Article slug</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "deleted", "slug": "old-article", "kb": "personal"}</code></pre>
+        <h4>Errors</h4>
+        <p><span class="status-code s4xx">404</span> Article not found<br>
+        <span class="status-code s4xx">400</span> Invalid KB name</p>
+    </div>
+</div>
+
+<!-- Search -->
+<h2 class="section-heading" id="search">
+    Search
+    <button class="expand-toggle" onclick="toggleSection(this)">expand all</button>
+</h2>
+<p class="section-intro">Full-text and hybrid vector search across all knowledge bases.</p>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/search</span>
+        <span class="endpoint-desc">Full-text search (FTS5)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Query Parameters</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">q</td><td class="param-type">string <span class="param-required">required</span></td><td>Search query</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">[
+  {
+    "slug": "kubernetes-networking",
+    "kb": "personal",
+    "title": "Kubernetes Networking",
+    "snippet": "...CNI plugins handle &lt;mark&gt;networking&lt;/mark&gt;...",
+    "rank": -12.5
+  }
+]</code></pre>
+        <h4>Example</h4>
+        <pre><code class="language-bash">curl "/api/search?q=kubernetes+networking"</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/api/search?q=test')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/search/hybrid</span>
+        <span class="endpoint-desc">Hybrid search (FTS5 + vector similarity + knowledge graph)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Query Parameters</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">q</td><td class="param-type">string <span class="param-required">required</span></td><td>Search query</td></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Filter by knowledge base</td></tr>
+            <tr><td class="param-name">limit</td><td class="param-type">int <span class="param-optional">optional</span></td><td>Max results (default: 15)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">[
+  {
+    "slug": "kubernetes-networking",
+    "kb": "personal",
+    "title": "Kubernetes Networking",
+    "score": 0.87,
+    "sources": ["fts", "vector", "graph"]
+  }
+]</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/api/search/hybrid?q=test&limit=5')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/search/reindex</span>
+        <span class="endpoint-desc">Rebuild the FTS search index</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <p>None required.</p>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "indexed", "articles": 142}</code></pre>
+    </div>
+</div>
+
+<!-- Research -->
+<h2 class="section-heading" id="research">
+    Research
+    <button class="expand-toggle" onclick="toggleSection(this)">expand all</button>
+</h2>
+<p class="section-intro">Trigger AI-powered research jobs that search the web, synthesize findings, and create wiki articles.</p>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/research</span>
+        <span class="endpoint-desc">Start a new research job</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">topic</td><td class="param-type">string <span class="param-required">required</span></td><td>Research topic (min 10 characters)</td></tr>
+        </table>
+        <pre><code class="language-json">{"topic": "Kubernetes gateway API vs ingress controllers"}</code></pre>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"job_id": 42, "status": "queued", "topic": "Kubernetes gateway API vs ingress controllers"}</code></pre>
+        <h4>Errors</h4>
+        <p><span class="status-code s4xx">400</span> Topic too short or missing<br>
+        <span class="status-code s429">429</span> Topic was researched within the last 7 days (cooldown)</p>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/research/local</span>
+        <span class="endpoint-desc">Research from local files/repos (no API keys needed)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">topic</td><td class="param-type">string <span class="param-required">required</span></td><td>Research topic (min 3 characters)</td></tr>
+            <tr><td class="param-name">path</td><td class="param-type">string <span class="param-required">required</span></td><td>Local filesystem path to scan</td></tr>
+            <tr><td class="param-name">pattern</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Glob filter (e.g. <code>*.py</code>, <code>*.md</code>)</td></tr>
+        </table>
+        <pre><code class="language-json">{"topic": "auth flow", "path": "/code/myproject", "pattern": "*.py"}</code></pre>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"job_id": 43, "status": "queued", "topic": "auth flow", "path": "/code/myproject"}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/research/status/{job_id}</span>
+        <span class="endpoint-desc">Poll job status</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Path Parameters</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">job_id</td><td class="param-type">int <span class="param-required">required</span></td><td>Job ID from research creation</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "id": 42,
+  "topic": "Kubernetes gateway API",
+  "status": "complete",
+  "created_at": "2026-04-08T10:00:00Z",
+  "completed_at": "2026-04-08T10:02:30Z",
+  "articles_created": 3,
+  "word_count": 4200,
+  "error": null
+}</code></pre>
+        <p style="font-size: 13px; color: #54595d; margin-top: 6px;">
+            Status values: <code>queued</code> &rarr; <code>searching</code> &rarr; <code>searching_round_1</code> &rarr; <code>searching_round_2</code> &rarr; <code>synthesizing</code> &rarr; <code>complete</code> | <code>error</code> | <code>cancelled</code>
+        </p>
+        <h4>Errors</h4>
+        <p><span class="status-code s4xx">404</span> Job not found</p>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/research/jobs</span>
+        <span class="endpoint-desc">List recent research jobs (last 50)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">[
+  {"id": 42, "topic": "...", "status": "complete", "created_at": "..."},
+  {"id": 41, "topic": "...", "status": "error", "error": "..."}
+]</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/api/research/jobs')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/research/history</span>
+        <span class="endpoint-desc">Full research history (jobs + article updates)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "jobs": [{"id": 42, "topic": "...", "status": "complete"}],
+  "article_updates": [{"slug": "...", "kb": "...", "action": "created"}]
+}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/research/sources/{job_id}</span>
+        <span class="endpoint-desc">Get sources used for a research job</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "job_id": 42,
+  "sources": [
+    {"url": "https://example.com/article", "title": "...", "word_count": 800}
+  ]
+}</code></pre>
+        <h4>Errors</h4>
+        <p><span class="status-code s4xx">404</span> Job not found</p>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/research/cancel/{job_id}</span>
+        <span class="endpoint-desc">Cancel a queued or in-progress job</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{"job_id": 42, "status": "cancelled"}</code></pre>
+        <h4>Errors</h4>
+        <p><span class="status-code s4xx">404</span> Job not found</p>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/research/retry-errors</span>
+        <span class="endpoint-desc">Re-queue all errored jobs</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">limit</td><td class="param-type">int <span class="param-optional">optional</span></td><td>Max jobs to retry (default: 50)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"retried": 3, "total_errors": 5}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method delete">DELETE</span>
+        <span class="endpoint-path">/api/research/{filename}</span>
+        <span class="endpoint-desc">Delete a research output file</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Path Parameters</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">filename</td><td class="param-type">string <span class="param-required">required</span></td><td>Research file name (no path separators allowed)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "deleted", "filename": "research-output.md"}</code></pre>
+        <h4>Errors</h4>
+        <p><span class="status-code s4xx">400</span> Invalid filename (contains <code>/</code>, <code>\</code>, or <code>..</code>)<br>
+        <span class="status-code s4xx">404</span> File not found</p>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method delete">DELETE</span>
+        <span class="endpoint-path">/api/research/job/{job_id}</span>
+        <span class="endpoint-desc">Delete a job record from the database</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "deleted", "job_id": 42, "topic": "..."}</code></pre>
+        <h4>Errors</h4>
+        <p><span class="status-code s4xx">404</span> Job not found</p>
+    </div>
+</div>
+
+<!-- Quality -->
+<h2 class="section-heading" id="quality">
+    Quality
+    <button class="expand-toggle" onclick="toggleSection(this)">expand all</button>
+</h2>
+<p class="section-intro">Article quality scoring, enrichment, crosslinking, fact-checking, and freshness auditing.</p>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/quality/scores/{kb_name}</span>
+        <span class="endpoint-desc">Quality scores for all articles in a KB</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "kb": "personal",
+  "average_score": 68.4,
+  "total_articles": 142,
+  "distribution": {
+    "excellent (80-100)": 34,
+    "good (60-79)": 52,
+    "fair (40-59)": 38,
+    "poor (20-39)": 14,
+    "bad (0-19)": 4
+  },
+  "worst_10": [{"slug": "...", "score": 12, "issues": [...]}],
+  "best_10": [{"slug": "...", "score": 95}]
+}</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/api/quality/scores/personal')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/quality/score/{kb_name}/{slug}</span>
+        <span class="endpoint-desc">Quality score for a single article (full breakdown)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "slug": "kubernetes-networking",
+  "score": 78,
+  "breakdown": {"length": 20, "structure": 18, "links": 15, "tags": 10, "freshness": 15},
+  "issues": ["no external links"]
+}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/quality/shallow/{kb_name}</span>
+        <span class="endpoint-desc">List shallow/low-quality articles</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">[
+  {"slug": "quick-note", "title": "Quick Note", "word_count": 85, "issues": ["short article"]}
+]</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/quality/duplicates/{kb_name}</span>
+        <span class="endpoint-desc">Find duplicate/overlapping articles</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">[
+  {
+    "title_a": "Service Mesh", "slug_a": "service-mesh",
+    "title_b": "Istio Overview", "slug_b": "istio-overview",
+    "similarity": 0.82,
+    "shared_tags": ["istio", "networking"]
+  }
+]</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/quality/pass</span>
+        <span class="endpoint-desc">Run quality improvement pass (enrich + crosslink)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Knowledge base (default: <code>personal</code>)</td></tr>
+            <tr><td class="param-name">max_articles</td><td class="param-type">int <span class="param-optional">optional</span></td><td>Max articles to process (default: 10)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal", "max_articles": 10}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/quality/enrich/{kb_name}/{slug}</span>
+        <span class="endpoint-desc">Enrich a single article with additional content</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal", "slug": "kubernetes-networking", "action": "enrich"}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/quality/crosslink/{kb_name}/{slug}</span>
+        <span class="endpoint-desc">Add wikilinks between related articles</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal", "slug": "kubernetes-networking", "action": "crosslink"}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/quality/factcheck/{kb_name}/{slug}</span>
+        <span class="endpoint-desc">Fact-check an article against web sources</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal", "slug": "kubernetes-networking", "action": "fact_check"}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/quality/freshness/{kb_name}/{slug}</span>
+        <span class="endpoint-desc">Freshness audit for a single article</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">auto_update</td><td class="param-type">bool <span class="param-optional">optional</span></td><td>Auto-update stale content (default: <code>true</code>)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal", "slug": "kubernetes-networking", "action": "freshness_audit", "auto_update": true}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/quality/freshness-batch</span>
+        <span class="endpoint-desc">Batch freshness audit across stalest articles</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Knowledge base (default: <code>personal</code>)</td></tr>
+            <tr><td class="param-name">max_articles</td><td class="param-type">int <span class="param-optional">optional</span></td><td>Max articles to audit (default: 10)</td></tr>
+            <tr><td class="param-name">auto_update</td><td class="param-type">bool <span class="param-optional">optional</span></td><td>Auto-update stale content (default: <code>true</code>)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal", "max_articles": 10, "auto_update": true}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/quality/auto-enrich</span>
+        <span class="endpoint-desc">Auto-enrich all articles below quality threshold</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Knowledge base (default: <code>personal</code>)</td></tr>
+            <tr><td class="param-name">threshold</td><td class="param-type">int <span class="param-optional">optional</span></td><td>Score threshold (default: 60)</td></tr>
+            <tr><td class="param-name">max_articles</td><td class="param-type">int <span class="param-optional">optional</span></td><td>Max articles to enrich (default: 20)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal", "threshold": 60, "below_threshold": 14, "queued": 14}</code></pre>
+    </div>
+</div>
+
+<!-- Knowledge Graph -->
+<h2 class="section-heading" id="graph">
+    Knowledge Graph
+    <button class="expand-toggle" onclick="toggleSection(this)">expand all</button>
+</h2>
+<p class="section-intro">Entity-relationship graph for discovering connections between articles and concepts.</p>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/graph/data</span>
+        <span class="endpoint-desc">Full knowledge graph (nodes + edges for D3.js)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "nodes": [
+    {"id": "kubernetes", "type": "entity", "count": 12},
+    {"id": "kubernetes-networking", "type": "article", "kb": "personal"}
+  ],
+  "edges": [
+    {"source": "kubernetes-networking", "target": "kubernetes", "weight": 3}
+  ]
+}</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/api/graph/data')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/graph/entity/{name}</span>
+        <span class="endpoint-desc">Articles mentioning a specific entity</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{"entity": "kubernetes", "articles": [{"slug": "...", "kb": "...", "title": "..."}]}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/graph/related/{kb}/{slug}</span>
+        <span class="endpoint-desc">Related articles via graph traversal</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Query Parameters</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">depth</td><td class="param-type">int <span class="param-optional">optional</span></td><td>Traversal depth, 1-3 (default: 2)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"slug": "kubernetes-networking", "kb": "personal", "related": [{"slug": "...", "score": 5}]}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/graph/build</span>
+        <span class="endpoint-desc">Rebuild knowledge graph for a KB (async)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Knowledge base (default: <code>personal</code>)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal", "action": "build_graph"}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/embeddings/build</span>
+        <span class="endpoint-desc">Build vector embeddings for a KB (async)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Knowledge base (default: <code>personal</code>)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal", "action": "build_embeddings"}</code></pre>
+    </div>
+</div>
+
+<!-- Palace -->
+<h2 class="section-heading" id="palace">
+    Palace
+    <button class="expand-toggle" onclick="toggleSection(this)">expand all</button>
+</h2>
+<p class="section-intro">Memory palace navigation &mdash; articles organized into halls and rooms by topic clustering.</p>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/palace/map</span>
+        <span class="endpoint-desc">Full palace map (halls, rooms, article counts)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Query Parameters</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Filter by knowledge base</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "halls": [
+    {
+      "name": "Infrastructure",
+      "kb": "personal",
+      "article_count": 24,
+      "rooms": [
+        {"name": "Kubernetes Cluster Management", "member_count": 8}
+      ]
+    }
+  ]
+}</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/api/palace/map')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/palace/hall/{kb}/{hall}</span>
+        <span class="endpoint-desc">List articles in a hall</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "hall": "Infrastructure",
+  "kb": "personal",
+  "articles": [{"slug": "...", "title": "...", "confidence": 0.92, "word_count": 1200}],
+  "count": 24
+}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/palace/room/{kb}/{room_name}</span>
+        <span class="endpoint-desc">List articles in a room</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "room": "Kubernetes Cluster Management",
+  "kb": "personal",
+  "articles": [{"slug": "...", "title": "...", "relevance": 0.88, "hall": "Infrastructure"}],
+  "count": 8
+}</code></pre>
+        <h4>Errors</h4>
+        <p><span class="status-code s4xx">404</span> Room not found</p>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/palace/article/{kb}/{slug}</span>
+        <span class="endpoint-desc">Palace context for a single article</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "slug": "kubernetes-networking",
+  "kb": "personal",
+  "hall": "Infrastructure",
+  "confidence": 0.92,
+  "rooms": [{"name": "Kubernetes Cluster Management", "relevance": 0.88}]
+}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/palace/classify</span>
+        <span class="endpoint-desc">Trigger palace classification for all articles (async)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Knowledge base (default: <code>personal</code>)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal"}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/palace/cluster</span>
+        <span class="endpoint-desc">Trigger room clustering from graph data (async)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Knowledge base (default: <code>personal</code>)</td></tr>
+        </table>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "kb": "personal"}</code></pre>
+    </div>
+</div>
+
+<!-- Ingest -->
+<h2 class="section-heading" id="ingest">
+    Ingest
+    <button class="expand-toggle" onclick="toggleSection(this)">expand all</button>
+</h2>
+<p class="section-intro">Import content from external sources: YouTube videos, PDFs, ePubs, and web directories.</p>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/media/youtube</span>
+        <span class="endpoint-desc">Ingest YouTube video(s) via transcript extraction</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">url</td><td class="param-type">string</td><td>Single YouTube URL</td></tr>
+            <tr><td class="param-name">urls</td><td class="param-type">string[]</td><td>Multiple YouTube URLs (max 10)</td></tr>
+        </table>
+        <p style="font-size: 12px; color: #54595d;">Provide either <code>url</code> or <code>urls</code>, not both.</p>
+        <pre><code class="language-json">{"url": "https://youtube.com/watch?v=dQw4w9WgXcQ"}</code></pre>
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "jobs": [{"job_id": 44, "url": "https://youtube.com/watch?v=...", "status": "queued"}],
+  "count": 1
+}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/ingest/document</span>
+        <span class="endpoint-desc">Ingest PDF/ePub from URL(s)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">url</td><td class="param-type">string</td><td>Single document URL</td></tr>
+            <tr><td class="param-name">urls</td><td class="param-type">string[]</td><td>Multiple URLs (max 20)</td></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Target KB (default: <code>personal</code>)</td></tr>
+        </table>
+        <pre><code class="language-json">{"url": "https://example.com/whitepaper.pdf", "kb": "research"}</code></pre>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"jobs": [{"url": "...", "status": "queued"}], "count": 1}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/ingest/directory</span>
+        <span class="endpoint-desc">Crawl a web directory for documents and ingest</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Request Body</h4>
+        <table class="param-table">
+            <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+            <tr><td class="param-name">url</td><td class="param-type">string <span class="param-required">required</span></td><td>Directory URL to crawl</td></tr>
+            <tr><td class="param-name">kb</td><td class="param-type">string <span class="param-optional">optional</span></td><td>Target KB (default: <code>personal</code>)</td></tr>
+            <tr><td class="param-name">max_files</td><td class="param-type">int <span class="param-optional">optional</span></td><td>Max files to ingest (default: 10, max: 50)</td></tr>
+        </table>
+        <pre><code class="language-json">{"url": "https://example.com/papers/", "kb": "research", "max_files": 20}</code></pre>
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "url": "...", "max_files": 20}</code></pre>
+    </div>
+</div>
+
+<!-- GitHub -->
+<h2 class="section-heading" id="github">
+    GitHub
+    <button class="expand-toggle" onclick="toggleSection(this)">expand all</button>
+</h2>
+<p class="section-intro">Track GitHub repositories for releases and automatically index their documentation.</p>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/github/tracked</span>
+        <span class="endpoint-desc">List all tracked repositories</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "tracked": ["kubernetes/kubernetes", "istio/istio"],
+  "own": ["ghndrx/wikidelve", "ghndrx/hearth"]
+}</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/api/github/tracked')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/github/releases</span>
+        <span class="endpoint-desc">Get latest releases for all tracked repos</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">[
+  {"repo": "kubernetes/kubernetes", "tag": "v1.32.0", "published": "2026-04-01", "url": "..."}
+]</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/github/check-releases</span>
+        <span class="endpoint-desc">Check for new releases and auto-research them (async)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "action": "check_releases"}</code></pre>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/api/github/index-repos</span>
+        <span class="endpoint-desc">Index READMEs and changelogs from your repos (async)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "queued", "action": "index_repos"}</code></pre>
+    </div>
+</div>
+
+<!-- System -->
+<h2 class="section-heading" id="system">
+    System
+    <button class="expand-toggle" onclick="toggleSection(this)">expand all</button>
+</h2>
+<p class="section-intro">Health checks, status monitoring, and aggregate statistics.</p>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/health</span>
+        <span class="endpoint-desc">Health check</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{"status": "ok", "kbs": {"personal": true, "research": true}}</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/health')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/status</span>
+        <span class="endpoint-desc">Full system status (workers, jobs, wiki stats)</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "grokmaxxing": false,
+  "jobs": {
+    "total": 89,
+    "complete": 82,
+    "active": 0,
+    "errors": 3,
+    "cancelled": 4,
+    "words_generated": 245000,
+    "added_to_wiki": 78
+  },
+  "wiki": {
+    "total_articles": 142,
+    "total_words": 198000,
+    "kbs": {
+      "personal": {"articles": 98, "words": 140000},
+      "research": {"articles": 44, "words": 58000}
+    }
+  }
+}</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/api/status')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="endpoint">
+    <div class="endpoint-header" onclick="toggleEndpoint(this)">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/api/stats</span>
+        <span class="endpoint-desc">Aggregate statistics</span>
+    </div>
+    <div class="endpoint-body">
+        <h4>Response</h4>
+        <pre><code class="language-json">{
+  "kbs": {"personal": {"articles": 98, "words": 140000}},
+  "total_articles": 142,
+  "total_words": 198000,
+  "research_jobs": 89
+}</code></pre>
+        <div class="try-it">
+            <button onclick="tryEndpoint(this, 'GET', '/api/stats')">Try it</button>
+            <div class="try-it-result"><pre><code></code></pre></div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+function toggleEndpoint(header) {
+    var body = header.nextElementSibling;
+    body.classList.toggle('open');
+}
+
+function toggleSection(btn) {
+    var section = btn.parentElement;
+    var endpoints = [];
+    var el = section.nextElementSibling;
+    while (el && !el.matches('h2')) {
+        if (el.classList && el.classList.contains('endpoint')) {
+            endpoints.push(el);
+        }
+        el = el.nextElementSibling;
+    }
+    var expanding = btn.textContent.trim() === 'expand all';
+    endpoints.forEach(function(ep) {
+        var body = ep.querySelector('.endpoint-body');
+        if (expanding) body.classList.add('open');
+        else body.classList.remove('open');
+    });
+    btn.textContent = expanding ? 'collapse all' : 'expand all';
+}
+
+async function tryEndpoint(btn, method, path) {
+    var resultDiv = btn.parentElement.querySelector('.try-it-result');
+    var codeEl = resultDiv.querySelector('code');
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+    resultDiv.style.display = 'block';
+    codeEl.textContent = '';
+    try {
+        var resp = await fetch(path, {method: method});
+        var data = await resp.json();
+        codeEl.textContent = JSON.stringify(data, null, 2);
+        codeEl.className = 'language-json';
+        if (window.hljs) hljs.highlightElement(codeEl);
+    } catch (e) {
+        codeEl.textContent = 'Error: ' + e.message;
+    }
+    btn.textContent = 'Try it';
+    btn.disabled = false;
+}
+
+// Set base URL
+document.getElementById('base-url').textContent = window.location.origin;
+</script>
+{% endblock %}

@@ -1,0 +1,1524 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+
+{# Inherit the default sidebar — the in-page tab nav is the single
+   source of truth for admin section navigation, so duplicating the
+   links in a sidebar block would just waste vertical space. #}
+
+{% block content %}
+<div class="admin-page-header">
+    <h1 class="admin-page-title">Admin</h1>
+    <p class="admin-page-sub">Knowledge base health, quality monitoring, and maintenance.</p>
+</div>
+
+<!-- Tab navigation -->
+<nav class="admin-tabs" role="tablist">
+    <button class="admin-tab active" data-tab="jobs" role="tab">Jobs</button>
+    <button class="admin-tab" data-tab="health" role="tab">Health</button>
+    <button class="admin-tab" data-tab="quality" role="tab">Quality</button>
+    <button class="admin-tab" data-tab="duplicates" role="tab">Duplicates</button>
+    <button class="admin-tab" data-tab="actions" role="tab">Actions</button>
+    <button class="admin-tab" data-tab="auto-discovery" role="tab">Auto-Discovery</button>
+    <button class="admin-tab" data-tab="kb-settings" role="tab">KB Settings</button>
+</nav>
+
+<!-- Jobs panel -->
+<section class="admin-panel active" data-panel="jobs">
+<div class="admin-section-header">
+    <h2 class="admin-section-title" id="jobs">
+        Research Jobs
+        <span id="jobs-live-dot" class="jobs-live-dot"></span>
+    </h2>
+    <span id="jobs-last-updated" class="admin-section-meta"></span>
+</div>
+
+<div id="jobs-summary" class="jobs-summary-grid">
+    <button type="button" class="job-card" data-filter="all">
+        <span class="job-card-label">Total (recent)</span>
+        <span class="job-card-value" id="jobs-total">&mdash;</span>
+    </button>
+    <button type="button" class="job-card" data-filter="queued">
+        <span class="job-card-label">Queued</span>
+        <span class="job-card-value" id="jobs-queued">&mdash;</span>
+    </button>
+    <button type="button" class="job-card" data-filter="active">
+        <span class="job-card-label">Active</span>
+        <span class="job-card-value" id="jobs-active">&mdash;</span>
+    </button>
+    <button type="button" class="job-card" data-filter="awaiting_review">
+        <span class="job-card-label">Awaiting review</span>
+        <span class="job-card-value" id="jobs-review">&mdash;</span>
+    </button>
+    <button type="button" class="job-card" data-filter="complete">
+        <span class="job-card-label">Complete</span>
+        <span class="job-card-value" id="jobs-complete">&mdash;</span>
+    </button>
+    <button type="button" class="job-card" data-filter="error">
+        <span class="job-card-label">Errored</span>
+        <span class="job-card-value" id="jobs-error">&mdash;</span>
+    </button>
+</div>
+
+<div class="admin-toolbar">
+    <div class="admin-toolbar-group">
+        <label>Filter</label>
+        <select id="jobs-filter" class="wiki-input admin-toolbar-select">
+            <option value="all">All statuses</option>
+            <option value="queued">Queued</option>
+            <option value="active">Active</option>
+            <option value="awaiting_review">Awaiting review</option>
+            <option value="complete">Complete</option>
+            <option value="error">Errored</option>
+            <option value="cancelled">Cancelled</option>
+        </select>
+    </div>
+    <div class="admin-toolbar-group">
+        <label>Refresh</label>
+        <select id="jobs-refresh-rate" class="wiki-input admin-toolbar-select admin-toolbar-select-narrow">
+            <option value="3000" selected>3s</option>
+            <option value="5000">5s</option>
+            <option value="10000">10s</option>
+            <option value="30000">30s</option>
+            <option value="0">Off</option>
+        </select>
+    </div>
+    <div class="admin-toolbar-spacer"></div>
+    <button id="jobs-refresh-now" class="wiki-btn admin-toolbar-btn">Refresh now</button>
+    <button id="jobs-retry-errors" class="wiki-btn admin-toolbar-btn" title="Re-queue every errored job">Retry errors</button>
+</div>
+<div style="max-height: 520px; overflow-y: auto; border: 1px solid var(--color-border-light); border-radius: 0;">
+    <table class="wiki-table" style="width: 100%; margin: 0;">
+        <thead style="position: sticky; top: 0; background: var(--color-surface-alt); z-index: 1;">
+            <tr>
+                <th style="width: 48px;">ID</th>
+                <th>Topic</th>
+                <th style="width: 140px;">Status</th>
+                <th style="width: 80px; text-align: right;">Sources</th>
+                <th style="width: 80px; text-align: right;">Words</th>
+                <th style="width: 140px;">Started</th>
+                <th style="width: 90px;">Duration</th>
+                <th style="width: 120px;">Article</th>
+                <th style="width: 90px;">Retry</th>
+            </tr>
+        </thead>
+        <tbody id="jobs-tbody">
+            <tr><td colspan="9" style="text-align: center; color: var(--color-text-subtle); padding: 20px;">Loading…</td></tr>
+        </tbody>
+    </table>
+</div>
+<div style="margin-top: 8px; text-align: center;">
+    <button id="jobs-load-more" class="wiki-btn" style="font-size: 12px; padding: 4px 14px; display: none;">Load older jobs</button>
+    <span id="jobs-loaded-count" style="font-size: 12px; color: var(--color-text-subtle); margin-left: 8px;"></span>
+</div>
+
+</section>
+
+<!-- Health panel -->
+<section class="admin-panel" data-panel="health">
+<!-- KB Health Overview -->
+<h2 class="section-heading" id="health">KB Health Overview</h2>
+{% if stats %}
+<table class="wiki-table" style="width: 100%;">
+    <thead>
+        <tr>
+            <th>Knowledge Base</th>
+            <th style="text-align: right;">Articles</th>
+            <th style="text-align: right;">Words</th>
+            <th style="text-align: right;">Avg Words</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% set ns = namespace(total_articles=0, total_words=0) %}
+        {% for kb_name, s in stats.items() %}
+        {% set ns.total_articles = ns.total_articles + (s.count | default(s.articles | default(0))) %}
+        {% set ns.total_words = ns.total_words + (s.words | default(0)) %}
+        <tr>
+            <td><a href="/?tag={{ kb_name | urlencode }}">{{ kb_name | title }}</a></td>
+            <td style="text-align: right;">{{ s.count | default(s.articles | default(0)) }}</td>
+            <td style="text-align: right;">{{ "{:,}".format(s.words | default(0)) }}</td>
+            <td style="text-align: right;">
+                {% set art_count = s.count | default(s.articles | default(0)) %}
+                {% if art_count > 0 %}{{ "{:,}".format((s.words | default(0) / art_count) | int) }}{% else %}&mdash;{% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        <tr style="font-weight: bold; border-top: 2px solid #a2a9b1;">
+            <td>Total</td>
+            <td style="text-align: right;">{{ ns.total_articles }}</td>
+            <td style="text-align: right;">{{ "{:,}".format(ns.total_words) }}</td>
+            <td style="text-align: right;">{% if ns.total_articles > 0 %}{{ "{:,}".format((ns.total_words / ns.total_articles) | int) }}{% else %}&mdash;{% endif %}</td>
+        </tr>
+    </tbody>
+</table>
+{% else %}
+<p style="color: var(--color-text-subtle);">No knowledge bases found.</p>
+{% endif %}
+
+{% if quality_summary %}
+<table class="wiki-table" style="width: auto; margin-top: 8px;">
+    <tbody>
+        <tr>
+            <th>Shallow articles</th>
+            <td>{{ quality_summary.shallow_count | default(0) }}</td>
+        </tr>
+        <tr>
+            <th>Duplicate pairs</th>
+            <td>{{ quality_summary.duplicate_count | default(0) }}</td>
+        </tr>
+    </tbody>
+</table>
+{% endif %}
+
+<h3 class="section-heading" style="margin-top: 20px;">LLM Usage (rolling 7 days)</h3>
+<div id="usage-card" style="margin-top: 8px;">
+    <p style="color: var(--color-text-subtle); font-size: 13px;">Loading usage data&hellip;</p>
+</div>
+<p style="font-size: 11px; color: var(--color-text-subtle); margin-top: 6px;">
+    Cost figures are best-effort estimates using public list pricing and the
+    tokens reported by each provider. Embedding costs are approximated from
+    character counts since some backends don't report token usage.
+</p>
+
+<script nonce="{{ csp_nonce() }}">
+(async function loadUsage() {
+    try {
+        const [weekResp, allResp] = await Promise.all([
+            fetch('/api/usage/summary'),
+            fetch('/api/usage/all-time'),
+        ]);
+        if (!weekResp.ok) throw new Error('HTTP ' + weekResp.status);
+        const data = await weekResp.json();
+        const allTime = allResp.ok ? await allResp.json() : {rows: [], totals: {}};
+        const card = document.getElementById('usage-card');
+        const t = data.totals_week || {};
+        const at = allTime.totals || {};
+        const atRows = (allTime.rows || []).map(function(r) {
+            return '<tr>' +
+                '<td>' + r.provider + '</td>' +
+                '<td>' + r.model + '</td>' +
+                '<td>' + r.kind + '</td>' +
+                '<td style="text-align: right;">' + (r.calls || 0).toLocaleString() + '</td>' +
+                '<td style="text-align: right;">' + (r.input_tokens || 0).toLocaleString() + '</td>' +
+                '<td style="text-align: right;">' + (r.output_tokens || 0).toLocaleString() + '</td>' +
+                '<td style="text-align: right;">$' + (r.cost_usd || 0).toFixed(4) + '</td>' +
+                '<td style="font-size: 11px; color: var(--color-text-subtle);">' + (r.first_seen || '').slice(0, 10) + '</td>' +
+                '</tr>';
+        }).join('');
+        const dayRows = (data.per_day || []).map(function(d) {
+            return '<tr>' +
+                '<td>' + d.date + '</td>' +
+                '<td style="text-align: right;">' + (d.calls || 0).toLocaleString() + '</td>' +
+                '<td style="text-align: right;">' + (d.input_tokens || 0).toLocaleString() + '</td>' +
+                '<td style="text-align: right;">' + (d.output_tokens || 0).toLocaleString() + '</td>' +
+                '<td style="text-align: right;">$' + (d.cost_usd || 0).toFixed(4) + '</td>' +
+                '</tr>';
+        }).join('');
+        const breakdownRows = (data.today_breakdown || []).map(function(b) {
+            return '<tr>' +
+                '<td>' + b.provider + '</td>' +
+                '<td>' + b.model + '</td>' +
+                '<td>' + b.kind + '</td>' +
+                '<td style="text-align: right;">' + b.calls.toLocaleString() + '</td>' +
+                '<td style="text-align: right;">' + b.input_tokens.toLocaleString() + '</td>' +
+                '<td style="text-align: right;">' + b.output_tokens.toLocaleString() + '</td>' +
+                '<td style="text-align: right;">$' + b.cost_usd.toFixed(4) + '</td>' +
+                '</tr>';
+        }).join('');
+        card.innerHTML =
+            '<table class="wiki-table" style="width: auto;"><tbody>' +
+            '<tr><th>Calls (7d)</th><td style="text-align:right;">' + (t.calls || 0).toLocaleString() + '</td>' +
+                '<th style="padding-left: 20px;">Calls (all-time)</th><td style="text-align:right;">' + (at.calls || 0).toLocaleString() + '</td></tr>' +
+            '<tr><th>Input tokens (7d)</th><td style="text-align:right;">' + (t.input || 0).toLocaleString() + '</td>' +
+                '<th style="padding-left: 20px;">Input tokens (all-time)</th><td style="text-align:right;">' + (at.input || 0).toLocaleString() + '</td></tr>' +
+            '<tr><th>Output tokens (7d)</th><td style="text-align:right;">' + (t.output || 0).toLocaleString() + '</td>' +
+                '<th style="padding-left: 20px;">Output tokens (all-time)</th><td style="text-align:right;">' + (at.output || 0).toLocaleString() + '</td></tr>' +
+            '<tr><th>Estimated cost (7d)</th><td style="text-align:right;">$' + (t.cost_usd || 0).toFixed(4) + '</td>' +
+                '<th style="padding-left: 20px;">Estimated cost (all-time)</th><td style="text-align:right;">$' + (at.cost_usd || 0).toFixed(4) + '</td></tr>' +
+            '</tbody></table>' +
+            (atRows ? '<h4 style="margin:12px 0 4px 0; font-size:13px;">All-time by model</h4>' +
+                '<table class="wiki-table" style="width:100%;"><thead><tr>' +
+                '<th>Provider</th><th>Model</th><th>Kind</th><th style="text-align:right;">Calls</th><th style="text-align:right;">Input tok</th><th style="text-align:right;">Output tok</th><th style="text-align:right;">Cost</th><th>First seen</th>' +
+                '</tr></thead><tbody>' + atRows + '</tbody></table>' : '') +
+            (dayRows ? '<h4 style="margin:12px 0 4px 0; font-size:13px;">Per day</h4>' +
+                '<table class="wiki-table" style="width:100%;"><thead><tr>' +
+                '<th>Date</th><th style="text-align:right;">Calls</th><th style="text-align:right;">Input tok</th><th style="text-align:right;">Output tok</th><th style="text-align:right;">Cost</th>' +
+                '</tr></thead><tbody>' + dayRows + '</tbody></table>' : '') +
+            (breakdownRows ? '<h4 style="margin:12px 0 4px 0; font-size:13px;">Today by model</h4>' +
+                '<table class="wiki-table" style="width:100%;"><thead><tr>' +
+                '<th>Provider</th><th>Model</th><th>Kind</th><th style="text-align:right;">Calls</th><th style="text-align:right;">Input tok</th><th style="text-align:right;">Output tok</th><th style="text-align:right;">Cost</th>' +
+                '</tr></thead><tbody>' + breakdownRows + '</tbody></table>' : '');
+    } catch (e) {
+        document.getElementById('usage-card').innerHTML =
+            '<p style="color: var(--color-error); font-size: 13px;">Usage unavailable: ' + e.message + '</p>';
+    }
+})();
+</script>
+
+</section>
+
+<!-- Quality panel -->
+<section class="admin-panel" data-panel="quality">
+<!-- Quality Scores -->
+<h2 class="section-heading" id="quality">Quality Scores</h2>
+{% if shallow_articles %}
+<table class="wiki-table" style="width: 100%;">
+    <thead>
+        <tr>
+            <th>Title</th>
+            <th>KB</th>
+            <th style="text-align: right;">Words</th>
+            <th>Issues</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for a in shallow_articles %}
+        <tr>
+            <td><a href="/wiki/{{ a.kb | default('personal') | e }}/{{ a.slug | e }}">{{ a.title | e }}</a></td>
+            <td><span style="font-size: 12px; color: var(--color-text-muted); border: 1px solid var(--color-border-light); padding: 0 4px;">{{ a.kb | default('personal') | e }}</span></td>
+            <td style="text-align: right;">{{ a.word_count | default(0) }}</td>
+            <td style="font-size: 13px;">
+                {% if a.issues %}
+                    {% for issue in a.issues %}
+                    <span style="color: var(--color-warning);">{{ issue | e }}</span>{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                {% elif a.word_count is defined and a.word_count < 300 %}
+                    <span style="color: var(--color-warning);">short article</span>
+                {% else %}
+                    <span style="color: var(--color-text-subtle);">needs review</span>
+                {% endif %}
+            </td>
+            <td style="white-space: nowrap;">
+                <button class="wiki-btn" onclick="runAction('/api/quality/enrich/{{ a.kb | default('personal') | e }}/{{ a.slug | e }}', this)" style="font-size: 12px; padding: 2px 8px;">Enrich</button>
+                <button class="wiki-btn" onclick="runAction('/api/quality/crosslink/{{ a.kb | default('personal') | e }}/{{ a.slug | e }}', this)" style="font-size: 12px; padding: 2px 8px;">Crosslink</button>
+                <button class="wiki-btn" onclick="runAction('/api/quality/factcheck/{{ a.kb | default('personal') | e }}/{{ a.slug | e }}', this)" style="font-size: 12px; padding: 2px 8px;">Fact-check</button>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p style="color: var(--color-text-subtle);">No quality issues detected.</p>
+{% endif %}
+
+<h3 class="sub-heading" style="margin-top: 20px;">Broken Wikilinks</h3>
+<p style="font-size: 13px; color: var(--color-text-muted); margin-bottom: 8px;">
+    Articles reference <code>[[Wikilinks]]</code> that have no matching article yet.
+    Queue research jobs on the missing targets to fill in the gaps.
+</p>
+<div id="broken-wikilinks-card">
+    <p style="color: var(--color-text-subtle); font-size: 13px;">Loading broken wikilinks&hellip;</p>
+</div>
+<script nonce="{{ csp_nonce() }}">
+(async function loadBrokenWikilinks() {
+    var card = document.getElementById('broken-wikilinks-card');
+    var kb = 'personal';
+    try {
+        var resp = await fetch('/api/quality/broken-wikilinks/' + kb);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        var data = await resp.json();
+        if (!data.broken_count) {
+            card.innerHTML =
+                '<p style="color: var(--color-success); font-size: 13px;">' +
+                'No broken wikilinks in <b>' + kb + '</b>. Nice.</p>';
+            return;
+        }
+        var rows = (data.by_target || []).slice(0, 40).map(function(t) {
+            var srcs = (t.sources || []).slice(0, 3).map(function(s) {
+                return '<a href="/wiki/' + kb + '/' + s.slug + '">' +
+                       escapeHtml(s.title) + '</a>';
+            }).join(', ');
+            if ((t.sources || []).length > 3) {
+                srcs += ', +' + ((t.sources || []).length - 3) + ' more';
+            }
+            return '<tr>' +
+                '<td><input type="checkbox" class="bwl-pick" data-slug="' +
+                    escapeHtml(t.slug) + '" checked /></td>' +
+                '<td><code>' + escapeHtml(t.target) + '</code></td>' +
+                '<td style="text-align: right;">' + t.count + '</td>' +
+                '<td style="font-size: 12px; color: var(--color-text-muted);">' + srcs + '</td>' +
+                '</tr>';
+        }).join('');
+        card.innerHTML =
+            '<p style="font-size: 13px; color: var(--color-text-muted); margin-bottom: 6px;">' +
+                '<b>' + data.broken_count + '</b> broken link' +
+                (data.broken_count === 1 ? '' : 's') + ' to ' +
+                '<b>' + data.unique_targets + '</b> unique target' +
+                (data.unique_targets === 1 ? '' : 's') + ' across ' +
+                '<b>' + data.affected_articles + '</b> article' +
+                (data.affected_articles === 1 ? '' : 's') + '.</p>' +
+            '<table class="wiki-table" style="width: 100%;">' +
+                '<thead><tr>' +
+                    '<th style="width: 40px;">Queue</th>' +
+                    '<th>Target</th>' +
+                    '<th style="text-align: right; width: 70px;">Refs</th>' +
+                    '<th>Sources</th>' +
+                '</tr></thead><tbody>' + rows + '</tbody></table>' +
+            '<div style="margin-top: 8px; display: flex; gap: 8px;">' +
+                '<button id="bwl-queue-btn" class="wiki-btn wiki-btn-primary">Queue selected as research jobs</button>' +
+                '<button id="bwl-all-btn" class="wiki-btn">Select all</button>' +
+                '<button id="bwl-none-btn" class="wiki-btn">Clear</button>' +
+                '<span id="bwl-status" style="font-size: 12px; color: var(--color-text-subtle); align-self: center;"></span>' +
+            '</div>';
+
+        document.getElementById('bwl-all-btn').addEventListener('click', function() {
+            document.querySelectorAll('.bwl-pick').forEach(function(cb) { cb.checked = true; });
+        });
+        document.getElementById('bwl-none-btn').addEventListener('click', function() {
+            document.querySelectorAll('.bwl-pick').forEach(function(cb) { cb.checked = false; });
+        });
+        document.getElementById('bwl-queue-btn').addEventListener('click', async function() {
+            var btn = this;
+            var statusEl = document.getElementById('bwl-status');
+            var picked = Array.from(document.querySelectorAll('.bwl-pick'))
+                .filter(function(cb) { return cb.checked; })
+                .map(function(cb) { return cb.getAttribute('data-slug'); });
+            if (!picked.length) {
+                statusEl.textContent = 'Pick at least one target.';
+                return;
+            }
+            btn.disabled = true;
+            statusEl.textContent = 'Queuing ' + picked.length + '...';
+            try {
+                var qResp = await fetch('/api/quality/broken-wikilinks/' + kb + '/research', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({targets: picked}),
+                });
+                var qData = await qResp.json();
+                if (qResp.ok) {
+                    statusEl.textContent =
+                        'Queued ' + (qData.queued || []).length +
+                        ', skipped ' + (qData.skipped || []).length +
+                        ' (cooldown). Check the Jobs tab.';
+                } else {
+                    statusEl.textContent = 'Error: ' + (qData.detail || qResp.statusText);
+                }
+            } catch (err) {
+                statusEl.textContent = 'Error: ' + err.message;
+            }
+            btn.disabled = false;
+        });
+    } catch (err) {
+        card.innerHTML =
+            '<p style="color: var(--color-error); font-size: 13px;">' +
+            'Broken wikilinks unavailable: ' + err.message + '</p>';
+    }
+})();
+</script>
+
+</section>
+
+<!-- Duplicates panel -->
+<section class="admin-panel" data-panel="duplicates">
+<!-- Duplicate Detection -->
+<h2 class="section-heading" id="duplicates">Duplicate Detection</h2>
+{% if duplicates %}
+<table class="wiki-table" style="width: 100%;">
+    <thead>
+        <tr>
+            <th>Article A</th>
+            <th>Article B</th>
+            <th style="text-align: right;">Similarity</th>
+            <th>Tags Overlap</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for d in duplicates %}
+        <tr>
+            <td>
+                {% if d.slug_a and d.kb_a %}<a href="/wiki/{{ d.kb_a | e }}/{{ d.slug_a | e }}">{{ d.title_a | e }}</a>{% else %}{{ d.title_a | e }}{% endif %}
+            </td>
+            <td>
+                {% if d.slug_b and d.kb_b %}<a href="/wiki/{{ d.kb_b | e }}/{{ d.slug_b | e }}">{{ d.title_b | e }}</a>{% else %}{{ d.title_b | e }}{% endif %}
+            </td>
+            <td style="text-align: right;">
+                {% if d.similarity is defined %}
+                <span style="{% if d.similarity > 0.8 %}color: var(--color-error);{% elif d.similarity > 0.6 %}color: var(--color-warning);{% else %}color: var(--color-success);{% endif %}">
+                    {{ "%.0f" | format(d.similarity * 100) }}%
+                </span>
+                {% else %}&mdash;{% endif %}
+            </td>
+            <td style="font-size: 13px;">
+                {% if d.shared_tags %}
+                    {% for tag in d.shared_tags %}
+                    <span class="tag">{{ tag | e }}</span>
+                    {% endfor %}
+                {% else %}
+                    <span style="color: var(--color-text-subtle);">&mdash;</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p style="color: var(--color-text-subtle);">No duplicates detected.</p>
+{% endif %}
+
+</section>
+
+<!-- Actions panel -->
+<section class="admin-panel" data-panel="actions">
+<!-- Actions Panel -->
+<h2 class="section-heading" id="actions">Actions</h2>
+<div style="border: 1px solid var(--color-border); background: var(--color-surface-alt); padding: 12px 16px; margin-bottom: 16px;">
+
+    <!-- Run Quality Pass -->
+    <h3 class="sub-heading" style="margin-top: 0;">Run Quality Pass</h3>
+    <div style="display: flex; gap: 4px; align-items: center; margin-bottom: 4px;">
+        <label for="qp-kb" style="font-size: 13px; color: var(--color-text-muted);">KB:</label>
+        <select id="qp-kb" class="wiki-input" style="width: 140px;">
+            {% for kb_name in stats.keys() %}
+            <option value="{{ kb_name | e }}">{{ kb_name | title }}</option>
+            {% endfor %}
+        </select>
+        <label for="qp-max" style="font-size: 13px; color: var(--color-text-muted); margin-left: 8px;">Max articles:</label>
+        <input type="number" id="qp-max" class="wiki-input" value="10" min="1" max="100" style="width: 60px;" />
+        <button class="wiki-btn wiki-btn-primary" onclick="runQualityPass(this)">Run Quality Pass</button>
+    </div>
+    <div id="qp-status" style="font-size: 13px;"></div>
+
+    <!-- Run Freshness Audit -->
+    <h3 class="sub-heading">Run Freshness Audit</h3>
+    <div style="display: flex; gap: 4px; align-items: center; margin-bottom: 4px;">
+        <label for="fa-kb" style="font-size: 13px; color: var(--color-text-muted);">KB:</label>
+        <select id="fa-kb" class="wiki-input" style="width: 140px;">
+            {% for kb_name in stats.keys() %}
+            <option value="{{ kb_name | e }}">{{ kb_name | title }}</option>
+            {% endfor %}
+        </select>
+        <button class="wiki-btn wiki-btn-primary" onclick="runFreshnessAudit(this)">Run Freshness Audit</button>
+    </div>
+    <div id="fa-status" style="font-size: 13px;"></div>
+
+</div>
+
+</section>
+
+<!-- Auto-Discovery panel -->
+<section class="admin-panel" data-panel="auto-discovery">
+<!-- Auto-Discovery Panel -->
+<h2 class="section-heading" id="auto-discovery">Auto-Discovery</h2>
+<p style="color: var(--color-text-muted); margin-bottom: 8px;">
+    Continuous research: each enabled KB's scheduler pulls candidate topics
+    from the knowledge graph and LLM follow-ups, then enqueues research jobs
+    hourly until its daily Serper budget is spent.
+    Global kill switch:
+    {% if auto_discovery_global_enabled %}
+    <span style="color: var(--color-success); font-weight: bold;">ENABLED</span>
+    {% else %}
+    <span style="color: var(--color-error); font-weight: bold;">DISABLED</span>
+    (set <code>AUTO_DISCOVERY_ENABLED=true</code> in env and restart)
+    {% endif %}
+</p>
+
+{% if auto_discovery %}
+{% for ad in auto_discovery %}
+<div style="border: 1px solid var(--color-border); background: var(--color-surface-alt); padding: 12px 16px; margin-bottom: 12px;">
+    <h3 class="sub-heading" style="margin-top: 0;">{{ ad.kb | title }} KB</h3>
+    {% if ad.error %}
+    <p style="color: var(--color-error);">Error: {{ ad.error | e }}</p>
+    {% else %}
+    <table class="wiki-table" style="width: 100%; margin-bottom: 8px;">
+        <tbody>
+            <tr>
+                <th style="width: 140px;">Enabled</th>
+                <td>
+                    {% if ad.enabled %}
+                    <span style="color: var(--color-success);">Yes</span>
+                    {% else %}
+                    <span style="color: var(--color-text-subtle);">No</span>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
+                <th>Budget today</th>
+                <td>
+                    {{ ad.used_today | default(0) }} / {{ ad.daily_budget | default(0) }} Serper calls
+                    ({{ ad.remaining | default(0) }} remaining)
+                </td>
+            </tr>
+            <tr>
+                <th>Strategy</th>
+                <td>{{ ad.strategy | default('—') }}</td>
+            </tr>
+            <tr>
+                <th>Max per hour</th>
+                <td>{{ ad.max_per_hour | default(0) }} jobs</td>
+            </tr>
+            <tr>
+                <th>Pending candidates</th>
+                <td>{{ ad.pending_candidates | default(0) }}</td>
+            </tr>
+            <tr>
+                <th>Seed topics</th>
+                <td>
+                    {% if ad.seed_topics %}
+                    {% for t in ad.seed_topics %}
+                    <span class="tag">{{ t | e }}</span>
+                    {% endfor %}
+                    {% else %}
+                    <span style="color: var(--color-text-subtle);">(entire KB)</span>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
+                <th>Last run</th>
+                <td style="font-size: 13px;">
+                    {% if ad.last_run %}
+                    {{ ad.last_run.at | default('—') }} —
+                    enqueued: {{ ad.last_run.enqueued | default(0) }}
+                    {% if ad.last_run.skipped %}, skipped: {{ ad.last_run.skipped | e }}{% endif %}
+                    {% else %}
+                    <span style="color: var(--color-text-subtle);">Never</span>
+                    {% endif %}
+                </td>
+            </tr>
+        </tbody>
+    </table>
+
+    <form class="ad-save-form" data-kb="{{ ad.kb | e }}" style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+        <label style="font-size: 13px;">
+            <input type="checkbox" id="ad-enabled-{{ ad.kb | e }}" {% if ad.enabled %}checked{% endif %} /> Enabled
+        </label>
+        <label style="font-size: 13px;">Budget:
+            <input type="number" id="ad-budget-{{ ad.kb | e }}" class="wiki-input" value="{{ ad.daily_budget | default(500) }}" min="0" style="width: 80px;" />
+        </label>
+        <label style="font-size: 13px;">Max/hr:
+            <input type="number" id="ad-maxhr-{{ ad.kb | e }}" class="wiki-input" value="{{ ad.max_per_hour | default(3) }}" min="0" style="width: 60px;" />
+        </label>
+        <label style="font-size: 13px;">Strategy:
+            <select id="ad-strategy-{{ ad.kb | e }}" class="wiki-input" style="width: 150px;">
+                <optgroup label="Baseline">
+                    <option value="hybrid" {% if ad.strategy == 'hybrid' %}selected{% endif %}>hybrid (kg+llm)</option>
+                    <option value="kg_entities" {% if ad.strategy == 'kg_entities' %}selected{% endif %}>kg_entities</option>
+                    <option value="llm" {% if ad.strategy == 'llm' %}selected{% endif %}>llm follow-ups</option>
+                </optgroup>
+                <optgroup label="Self-mining">
+                    <option value="all" {% if ad.strategy == 'all' %}selected{% endif %}>all (everything)</option>
+                    <option value="contradiction" {% if ad.strategy == 'contradiction' %}selected{% endif %}>contradictions</option>
+                    <option value="stale" {% if ad.strategy == 'stale' %}selected{% endif %}>stale articles</option>
+                    <option value="orphan_entity" {% if ad.strategy == 'orphan_entity' %}selected{% endif %}>orphan entities</option>
+                    <option value="question" {% if ad.strategy == 'question' %}selected{% endif %}>unanswered questions</option>
+                    <option value="blind_spot" {% if ad.strategy == 'blind_spot' %}selected{% endif %}>blind spots</option>
+                    <option value="stub" {% if ad.strategy == 'stub' %}selected{% endif %}>TOC stubs</option>
+                    <option value="wikilink" {% if ad.strategy == 'wikilink' %}selected{% endif %}>broken wikilinks</option>
+                </optgroup>
+            </select>
+        </label>
+        <label style="font-size: 13px;">Seeds (JSON):
+            <input type="text" id="ad-seeds-{{ ad.kb | e }}" class="wiki-input" value='{% if ad.seed_topics %}{{ ad.seed_topics | tojson }}{% endif %}' placeholder='["Rust async"]' style="width: 200px;" />
+        </label>
+        <button class="wiki-btn wiki-btn-primary" type="submit">Save</button>
+        <button class="wiki-btn" type="button" onclick="runAutoDiscovery('{{ ad.kb | e }}', this)">Run now</button>
+    </form>
+    <div id="ad-status-{{ ad.kb | e }}" style="font-size: 13px; margin-top: 4px;"></div>
+    {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<p style="color: var(--color-text-subtle);">No KBs available.</p>
+{% endif %}
+
+</section>
+
+<!-- KB Settings panel -->
+<section class="admin-panel" data-panel="kb-settings">
+<!-- Per-KB LLM provider/model + persona settings -->
+<h2 class="section-heading" id="kb-settings">KB Settings</h2>
+<p style="color: var(--color-text-muted); margin-bottom: 8px;">
+    Per-KB LLM provider/model overrides and synthesis persona. Leave any
+    field blank to use the global <code>LLM_PROVIDER</code> environment
+    default. The persona is prepended to the synthesis system prompt so
+    each KB can speak in its own voice.
+</p>
+
+{% if kb_settings %}
+{% for ks in kb_settings %}
+<div style="border: 1px solid var(--color-border); background: var(--color-surface-alt); padding: 12px 16px; margin-bottom: 12px;">
+    <h3 class="sub-heading" style="margin-top: 0;">{{ ks.kb | title }} KB</h3>
+    {% if ks.error %}
+    <p style="color: var(--color-error);">Error: {{ ks.error | e }}</p>
+    {% else %}
+    <table class="wiki-table" style="width: 100%; margin-bottom: 8px;">
+        <tbody>
+            <tr>
+                <th style="width: 160px;">Synthesis provider</th>
+                <td>{{ ks.config.get('synthesis_provider') or '(global default)' }}</td>
+            </tr>
+            <tr>
+                <th>Synthesis model</th>
+                <td>{{ ks.config.get('synthesis_model') or '(provider default)' }}</td>
+            </tr>
+            <tr>
+                <th>Query provider</th>
+                <td>{{ ks.config.get('query_provider') or '(global default)' }}</td>
+            </tr>
+            <tr>
+                <th>Query model</th>
+                <td>{{ ks.config.get('query_model') or '(provider default)' }}</td>
+            </tr>
+            <tr>
+                <th>Persona</th>
+                <td style="font-size: 13px;">
+                    {% if ks.config.get('persona') %}
+                    <code>{{ ks.config.get('persona')[:120] }}{% if ks.config.get('persona')|length > 120 %}...{% endif %}</code>
+                    {% else %}
+                    <span style="color: var(--color-text-subtle);">(none)</span>
+                    {% endif %}
+                </td>
+            </tr>
+        </tbody>
+    </table>
+
+    <form class="kbs-save-form" data-kb="{{ ks.kb | e }}" style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+        <label style="font-size: 13px;">Synth provider:
+            <select id="kbs-synth-provider-{{ ks.kb | e }}" class="wiki-input" style="width: 130px;">
+                <option value="">(global)</option>
+                <option value="minimax" {% if ks.config.get('synthesis_provider') == 'minimax' %}selected{% endif %}>minimax</option>
+                <option value="bedrock" {% if ks.config.get('synthesis_provider') == 'bedrock' %}selected{% endif %}>bedrock</option>
+            </select>
+        </label>
+        <label style="font-size: 13px;">Synth model:
+            <input type="text" id="kbs-synth-model-{{ ks.kb | e }}" class="wiki-input"
+                   value="{{ ks.config.get('synthesis_model') or '' }}"
+                   placeholder="(default)" style="width: 200px;" />
+        </label>
+        <label style="font-size: 13px;">Query provider:
+            <select id="kbs-query-provider-{{ ks.kb | e }}" class="wiki-input" style="width: 130px;">
+                <option value="">(global)</option>
+                <option value="minimax" {% if ks.config.get('query_provider') == 'minimax' %}selected{% endif %}>minimax</option>
+                <option value="bedrock" {% if ks.config.get('query_provider') == 'bedrock' %}selected{% endif %}>bedrock</option>
+            </select>
+        </label>
+        <label style="font-size: 13px;">Query model:
+            <input type="text" id="kbs-query-model-{{ ks.kb | e }}" class="wiki-input"
+                   value="{{ ks.config.get('query_model') or '' }}"
+                   placeholder="(default)" style="width: 200px;" />
+        </label>
+        <br />
+        <label style="font-size: 13px; width: 100%;">Persona prompt (prepended to synthesis system message):
+            <textarea id="kbs-persona-{{ ks.kb | e }}" class="wiki-input" rows="3"
+                      placeholder="You are a senior security engineer..."
+                      style="width: 100%; font-family: monospace;">{{ ks.config.get('persona') or '' }}</textarea>
+        </label>
+        <button class="wiki-btn wiki-btn-primary" type="submit">Save</button>
+    </form>
+    <div id="kbs-status-{{ ks.kb | e }}" style="font-size: 13px; margin-top: 4px;"></div>
+    {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<p style="color: var(--color-text-subtle);">No KBs available.</p>
+{% endif %}
+
+</section>
+{% endblock %}
+
+{% block styles %}
+<style nonce="{{ csp_nonce() }}">
+/* Admin-local token additions: soft pastel badges + active-tab highlights.
+   Each has a light + dark pair so the whole surface moves together. */
+:root {
+    --admin-accent-bg:    #eaf3ff;
+    --admin-accent-fg:    #0645ad;
+    --admin-accent-line:  #a7d7f9;
+    --admin-badge-warn-bg:  #fef6e7;
+    --admin-badge-warn-fg:  #8a6300;
+    --admin-badge-active-bg: #eaf3ff;
+    --admin-badge-active-fg: #1c4587;
+    --admin-badge-ok-bg:    #ddffdc;
+    --admin-badge-err-bg:   #fee7e6;
+    --admin-badge-err-fg:   #a4261d;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --admin-accent-bg:    #15304a;
+        --admin-accent-fg:    #79b8ff;
+        --admin-accent-line:  #2c5a8f;
+        --admin-badge-warn-bg:  #3a2c10;
+        --admin-badge-warn-fg:  #d29922;
+        --admin-badge-active-bg: #15304a;
+        --admin-badge-active-fg: #79b8ff;
+        --admin-badge-ok-bg:    #0f2e18;
+        --admin-badge-err-bg:   #3a1515;
+        --admin-badge-err-fg:   #f85149;
+    }
+}
+:root[data-theme="dark"] {
+    --admin-accent-bg:    #15304a;
+    --admin-accent-fg:    #79b8ff;
+    --admin-accent-line:  #2c5a8f;
+    --admin-badge-warn-bg:  #3a2c10;
+    --admin-badge-warn-fg:  #d29922;
+    --admin-badge-active-bg: #15304a;
+    --admin-badge-active-fg: #79b8ff;
+    --admin-badge-ok-bg:    #0f2e18;
+    --admin-badge-err-bg:   #3a1515;
+    --admin-badge-err-fg:   #f85149;
+}
+
+/* ===== Page header ===== */
+.admin-page-header {
+    margin-bottom: 12px;
+}
+.admin-page-title {
+    font-family: var(--font-serif);
+    font-size: 22px;
+    font-weight: normal;
+    color: var(--color-text-strong);
+    margin: 0 0 2px 0;
+    line-height: 1.2;
+}
+.admin-page-sub {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    margin: 0;
+}
+
+/* ===== Section header (tighter than h2 page heading) ===== */
+.admin-section-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 14px 0 8px 0;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--color-border-light);
+}
+.admin-section-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-muted);
+}
+.admin-section-meta {
+    font-size: 11px;
+    color: var(--color-text-subtle);
+}
+.admin-panel .section-heading:first-child {
+    margin-top: 0;
+}
+
+/* ===== Tabs ===== */
+.admin-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--color-border);
+    margin: 0 0 14px;
+    padding: 0;
+    flex-wrap: wrap;
+}
+.admin-tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    color: var(--color-text-muted);
+    margin-bottom: -1px;
+    transition: color 0.12s, border-color 0.12s;
+}
+.admin-tab:hover {
+    color: var(--color-text);
+}
+.admin-tab.active {
+    color: var(--color-text);
+    border-bottom-color: var(--color-primary);
+    font-weight: 600;
+}
+.admin-panel {
+    display: none;
+}
+.admin-panel.active {
+    display: block;
+}
+
+/* ===== Job summary cards: CSS grid, always fit 4-6 per row, compact ===== */
+.jobs-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 6px;
+    margin: 10px 0 14px;
+}
+.job-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-light);
+    padding: 8px 12px;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    transition: background 0.12s, border-color 0.12s;
+}
+.job-card:hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border);
+}
+.job-card.active {
+    background: var(--color-surface-hover);
+    border-color: var(--color-primary);
+    border-left-width: 3px;
+    padding-left: 10px;
+}
+.job-card-label {
+    display: block;
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--color-text-subtle);
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
+.job-card-value {
+    display: block;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--color-text-strong);
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ===== Compact toolbar for filter + refresh controls ===== */
+.admin-toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+    padding: 6px 10px;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--color-border-light);
+    font-size: 12px;
+}
+.admin-toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.admin-toolbar-group label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-subtle);
+    font-weight: 600;
+}
+.admin-toolbar-select {
+    font-size: 12px;
+    padding: 2px 6px;
+    height: 24px;
+    width: 160px;
+}
+.admin-toolbar-select-narrow {
+    width: 70px;
+}
+.admin-toolbar-btn {
+    font-size: 12px;
+    padding: 3px 10px;
+    height: 24px;
+}
+.admin-toolbar-spacer {
+    flex: 1;
+}
+
+/* ===== Live-updating pulse dot ===== */
+.jobs-live-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-success);
+    margin-left: 6px;
+    vertical-align: middle;
+    opacity: 0.2;
+    transition: opacity 0.3s;
+}
+@keyframes jobs-pulse {
+    0%, 100% { opacity: 0.2; }
+    50%      { opacity: 1; }
+}
+#jobs-live-dot.pulsing { animation: jobs-pulse 1.4s ease-in-out infinite; }
+
+/* ===== Status badges (still uses token overrides for contrast) ===== */
+.job-status-badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 0;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.job-status-queued      { background: var(--admin-badge-warn-bg);   color: var(--admin-badge-warn-fg); }
+.job-status-active      { background: var(--admin-badge-active-bg); color: var(--admin-badge-active-fg); }
+.job-status-review      { background: var(--admin-badge-warn-bg);   color: var(--color-warning); }
+.job-status-complete    { background: var(--admin-badge-ok-bg);     color: var(--color-success); }
+.job-status-error       { background: var(--admin-badge-err-bg);    color: var(--admin-badge-err-fg); }
+.job-status-cancelled   { background: var(--color-surface-hover);   color: var(--color-text-muted); }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+function escapeHtml(str) {
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// --- Admin tab switching ---------------------------------------------
+(function() {
+    var tabs = document.querySelectorAll('.admin-tab');
+    var panels = document.querySelectorAll('.admin-panel');
+
+    function showPanel(name) {
+        tabs.forEach(function(t) {
+            t.classList.toggle('active', t.getAttribute('data-tab') === name);
+        });
+        panels.forEach(function(p) {
+            p.classList.toggle('active', p.getAttribute('data-panel') === name);
+        });
+        try {
+            history.replaceState(null, '', '#' + name);
+        } catch (e) {}
+    }
+
+    tabs.forEach(function(tab) {
+        tab.addEventListener('click', function() {
+            showPanel(tab.getAttribute('data-tab'));
+        });
+    });
+
+    // Honour deep-links: /admin#quality opens Quality directly.
+    var hash = window.location.hash.replace(/^#/, '');
+    if (hash) {
+        var match = false;
+        tabs.forEach(function(t) {
+            if (t.getAttribute('data-tab') === hash) match = true;
+        });
+        if (match) showPanel(hash);
+    }
+})();
+
+function setStatus(el, html) {
+    el.innerHTML = html;
+}
+
+function statusMsg(type, text) {
+    var dot = 'gray';
+    var color = 'var(--color-text)';
+    if (type === 'loading') { dot = 'yellow'; color = 'var(--color-warning)'; }
+    else if (type === 'success') { dot = 'green'; color = 'var(--color-success)'; }
+    else if (type === 'error') { dot = 'red'; color = 'var(--color-error)'; }
+    return '<span class="status-dot ' + dot + '"></span><span style="color: ' + color + ';">' + text + '</span>';
+}
+
+async function runAction(url, btn) {
+    var origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '...';
+    try {
+        var resp = await fetch(url, { method: 'POST' });
+        var data = await resp.json();
+        if (resp.ok) {
+            btn.textContent = 'Done';
+            btn.style.borderColor = 'var(--color-success)';
+            btn.style.color = 'var(--color-success)';
+        } else {
+            btn.textContent = 'Error';
+            btn.style.borderColor = 'var(--color-error)';
+            btn.style.color = 'var(--color-error)';
+        }
+        setTimeout(function() {
+            btn.textContent = origText;
+            btn.style.borderColor = '';
+            btn.style.color = '';
+            btn.disabled = false;
+        }, 2000);
+    } catch (e) {
+        btn.textContent = origText;
+        btn.disabled = false;
+    }
+}
+
+async function runQualityPass(btn) {
+    var kb = document.getElementById('qp-kb').value;
+    var max = parseInt(document.getElementById('qp-max').value, 10) || 10;
+    var statusEl = document.getElementById('qp-status');
+    btn.disabled = true;
+    setStatus(statusEl, statusMsg('loading', 'Running quality pass on ' + escapeHtml(kb) + '...'));
+    try {
+        var resp = await fetch('/api/quality/pass', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kb_name: kb, max_articles: max })
+        });
+        var data = await resp.json();
+        if (resp.ok) {
+            var msg = 'Quality pass complete.';
+            if (data.enriched !== undefined) msg += ' Enriched: ' + data.enriched + '.';
+            if (data.crosslinked !== undefined) msg += ' Crosslinked: ' + data.crosslinked + '.';
+            setStatus(statusEl, statusMsg('success', msg));
+        } else {
+            setStatus(statusEl, statusMsg('error', data.detail || 'Quality pass failed.'));
+        }
+    } catch (e) {
+        setStatus(statusEl, statusMsg('error', e.message));
+    }
+    btn.disabled = false;
+}
+
+async function saveAutoDiscovery(event, kb) {
+    event.preventDefault();
+    var statusEl = document.getElementById('ad-status-' + kb);
+    var body = {
+        enabled: document.getElementById('ad-enabled-' + kb).checked,
+        daily_budget: parseInt(document.getElementById('ad-budget-' + kb).value, 10) || 0,
+        max_per_hour: parseInt(document.getElementById('ad-maxhr-' + kb).value, 10) || 0,
+        strategy: document.getElementById('ad-strategy-' + kb).value,
+    };
+    var seedsRaw = document.getElementById('ad-seeds-' + kb).value.trim();
+    if (seedsRaw) {
+        try {
+            body.seed_topics = JSON.parse(seedsRaw);
+        } catch (e) {
+            setStatus(statusEl, statusMsg('error', 'Seeds must be a JSON array of strings'));
+            return false;
+        }
+    } else {
+        body.seed_topics = null;
+    }
+    setStatus(statusEl, statusMsg('loading', 'Saving...'));
+    try {
+        var resp = await fetch('/api/auto-discovery/config/' + encodeURIComponent(kb), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        var data = await resp.json();
+        if (resp.ok) {
+            setStatus(statusEl, statusMsg('success', 'Saved. Reload to refresh status.'));
+        } else {
+            setStatus(statusEl, statusMsg('error', data.detail || 'Save failed'));
+        }
+    } catch (e) {
+        setStatus(statusEl, statusMsg('error', e.message));
+    }
+    return false;
+}
+
+async function runAutoDiscovery(kb, btn) {
+    var statusEl = document.getElementById('ad-status-' + kb);
+    btn.disabled = true;
+    setStatus(statusEl, statusMsg('loading', 'Running refill + enqueue for ' + kb + '...'));
+    try {
+        var resp = await fetch('/api/auto-discovery/run/' + encodeURIComponent(kb), { method: 'POST' });
+        var data = await resp.json();
+        if (resp.ok) {
+            var discovery = data.discovery || {};
+            var enqueue = data.enqueue || {};
+            var msg = 'Refill: kg=' + (discovery.kg_inserted || 0) + ', llm=' + (discovery.llm_inserted || 0) +
+                      '. Enqueue: ' + (enqueue.enqueued || 0) + ' jobs';
+            if (enqueue.skipped) msg += ' (skipped: ' + enqueue.skipped + ')';
+            setStatus(statusEl, statusMsg('success', msg));
+        } else {
+            setStatus(statusEl, statusMsg('error', data.detail || 'Run failed'));
+        }
+    } catch (e) {
+        setStatus(statusEl, statusMsg('error', e.message));
+    }
+    btn.disabled = false;
+}
+
+async function saveKBSettings(event, kb) {
+    event.preventDefault();
+    var statusEl = document.getElementById('kbs-status-' + kb);
+    var body = {
+        synthesis_provider: document.getElementById('kbs-synth-provider-' + kb).value || null,
+        synthesis_model: document.getElementById('kbs-synth-model-' + kb).value.trim() || null,
+        query_provider: document.getElementById('kbs-query-provider-' + kb).value || null,
+        query_model: document.getElementById('kbs-query-model-' + kb).value.trim() || null,
+        persona: document.getElementById('kbs-persona-' + kb).value || null,
+    };
+    setStatus(statusEl, statusMsg('loading', 'Saving...'));
+    try {
+        var resp = await fetch('/api/kb-settings/' + encodeURIComponent(kb), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        var data = await resp.json();
+        if (resp.ok) {
+            setStatus(statusEl, statusMsg('success', 'Saved. Reload to refresh status.'));
+        } else {
+            setStatus(statusEl, statusMsg('error', data.detail || 'Save failed'));
+        }
+    } catch (e) {
+        setStatus(statusEl, statusMsg('error', e.message));
+    }
+    return false;
+}
+
+async function runFreshnessAudit(btn) {
+    var kb = document.getElementById('fa-kb').value;
+    var statusEl = document.getElementById('fa-status');
+    btn.disabled = true;
+    setStatus(statusEl, statusMsg('loading', 'Running freshness audit on ' + escapeHtml(kb) + '...'));
+    try {
+        var resp = await fetch('/api/quality/freshness-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kb_name: kb })
+        });
+        var data = await resp.json();
+        if (resp.ok) {
+            var msg = 'Freshness audit complete.';
+            if (data.checked !== undefined) msg += ' Checked: ' + data.checked + ' articles.';
+            if (data.stale !== undefined) msg += ' Stale: ' + data.stale + '.';
+            setStatus(statusEl, statusMsg('success', msg));
+        } else {
+            setStatus(statusEl, statusMsg('error', data.detail || 'Freshness audit failed.'));
+        }
+    } catch (e) {
+        setStatus(statusEl, statusMsg('error', e.message));
+    }
+    btn.disabled = false;
+}
+
+// Wire the auto-discovery + KB-settings form submits via delegation so
+// the CSP inline-handler shim doesn't have to parse `return fn(event)`.
+document.addEventListener('submit', function(event) {
+    var form = event.target;
+    if (form.classList && form.classList.contains('ad-save-form')) {
+        event.preventDefault();
+        saveAutoDiscovery(event, form.getAttribute('data-kb'));
+        return;
+    }
+    if (form.classList && form.classList.contains('kbs-save-form')) {
+        event.preventDefault();
+        saveKBSettings(event, form.getAttribute('data-kb'));
+    }
+});
+
+// --- Research jobs live table ------------------------------------------
+(function() {
+    var ACTIVE_STATUSES = [
+        'searching', 'searching_round_1', 'searching_round_2',
+        'searching_round_3', 'downloading_docs', 'reading_pages',
+        'synthesizing', 'writing'
+    ];
+
+    function bucketFor(status) {
+        if (status === 'queued') return 'queued';
+        if (status === 'awaiting_review') return 'awaiting_review';
+        if (status === 'complete') return 'complete';
+        if (status === 'error' || status === 'no_results') return 'error';
+        if (status === 'cancelled') return 'cancelled';
+        if (ACTIVE_STATUSES.indexOf(status) !== -1) return 'active';
+        return 'active';
+    }
+
+    function badgeClass(status) {
+        var b = bucketFor(status);
+        if (b === 'queued') return 'job-status-queued';
+        if (b === 'active') return 'job-status-active';
+        if (b === 'awaiting_review') return 'job-status-review';
+        if (b === 'complete') return 'job-status-complete';
+        if (b === 'error') return 'job-status-error';
+        if (b === 'cancelled') return 'job-status-cancelled';
+        return 'job-status-active';
+    }
+
+    function fmtTime(iso) {
+        if (!iso) return '—';
+        try {
+            var d = new Date(iso);
+            var now = new Date();
+            var diffSec = Math.round((now - d) / 1000);
+            if (diffSec < 60) return diffSec + 's ago';
+            if (diffSec < 3600) return Math.round(diffSec / 60) + 'm ago';
+            if (diffSec < 86400) return Math.round(diffSec / 3600) + 'h ago';
+            return d.toLocaleDateString();
+        } catch (e) { return iso; }
+    }
+
+    function fmtDuration(startIso, endIso) {
+        if (!startIso) return '—';
+        try {
+            var start = new Date(startIso);
+            var end = endIso ? new Date(endIso) : new Date();
+            var secs = Math.max(0, Math.round((end - start) / 1000));
+            if (secs < 60) return secs + 's';
+            if (secs < 3600) return Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+            return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm';
+        } catch (e) { return '—'; }
+    }
+
+    var tbody = document.getElementById('jobs-tbody');
+    var filterSel = document.getElementById('jobs-filter');
+    var rateSel = document.getElementById('jobs-refresh-rate');
+    var refreshBtn = document.getElementById('jobs-refresh-now');
+    var retryBtn = document.getElementById('jobs-retry-errors');
+    var loadMoreBtn = document.getElementById('jobs-load-more');
+    var loadedCount = document.getElementById('jobs-loaded-count');
+    var lastUpdated = document.getElementById('jobs-last-updated');
+    var liveDot = document.getElementById('jobs-live-dot');
+    var cards = document.querySelectorAll('.job-card');
+
+    // Page size for the live poll. Polling is cheap + compact, so the
+    // default page is small; the Load More button fetches older batches
+    // via the before_id cursor without growing the live poll payload.
+    var JOBS_PAGE_SIZE = 50;
+    var timer = null;
+    var inFlight = false;
+    var olderJobs = [];       // accumulated paged-in history
+    var olderCursor = null;   // smallest id currently loaded from older batches
+    var olderExhausted = false;
+
+    cards.forEach(function(card) {
+        card.addEventListener('click', function() {
+            var filter = card.getAttribute('data-filter');
+            filterSel.value = filter === 'all' ? 'all' : filter;
+            render();
+            var targetId = card.querySelector('.job-card-value').id;
+            cards.forEach(function(c) { c.classList.remove('active'); });
+            if (filter !== 'all') card.classList.add('active');
+        });
+    });
+
+    filterSel.addEventListener('change', function() {
+        cards.forEach(function(c) { c.classList.remove('active'); });
+        var current = filterSel.value;
+        if (current !== 'all') {
+            cards.forEach(function(c) {
+                if (c.getAttribute('data-filter') === current) c.classList.add('active');
+            });
+        }
+        render();
+    });
+
+    rateSel.addEventListener('change', scheduleNext);
+    refreshBtn.addEventListener('click', function() { fetchJobs(); });
+    retryBtn.addEventListener('click', async function() {
+        retryBtn.disabled = true;
+        retryBtn.textContent = 'Retrying…';
+        try {
+            var r = await fetch('/api/research/retry-errors', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({limit: 50})
+            });
+            var data = await r.json();
+            retryBtn.textContent = 'Retried ' + (data.retried || 0);
+            fetchJobs();
+        } catch (e) {
+            retryBtn.textContent = 'Retry failed';
+        }
+        setTimeout(function() {
+            retryBtn.textContent = 'Retry errors';
+            retryBtn.disabled = false;
+        }, 2500);
+    });
+
+    var latestJobs = [];
+
+    function mergedJobs() {
+        // Merge live (newest) + paged older batches, dedupe by id.
+        var byId = {};
+        latestJobs.forEach(function(j) { byId[j.id] = j; });
+        olderJobs.forEach(function(j) { if (!(j.id in byId)) byId[j.id] = j; });
+        return Object.values(byId).sort(function(a, b) { return b.id - a.id; });
+    }
+
+    function render() {
+        var filter = filterSel.value;
+        var rows = mergedJobs();
+        if (filter !== 'all') {
+            rows = rows.filter(function(j) { return bucketFor(j.status) === filter; });
+        }
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--color-text-subtle); padding: 20px;">No jobs match this filter.</td></tr>';
+            return;
+        }
+        var html = '';
+        rows.forEach(function(j) {
+            var topic = escapeHtml((j.topic || '').substring(0, 140));
+            var statusLabel = escapeHtml(j.status || '—');
+            var cls = badgeClass(j.status);
+            var started = fmtTime(j.created);
+            var duration = fmtDuration(j.created, j.completed);
+            var articleCell = '—';
+            if (j.wiki_slug && j.added_to_wiki) {
+                articleCell = '<a href="/wiki/' + encodeURIComponent(j.wiki_kb || 'personal') + '/' + encodeURIComponent(j.wiki_slug) + '">view →</a>';
+            } else if (j.status === 'awaiting_review') {
+                articleCell = '<a href="/research/review/' + j.id + '" style="color: var(--color-warning); font-weight: 500;">review sources →</a>';
+            }
+            var retryCell = '—';
+            var bucket = bucketFor(j.status);
+            var isLocal = j.job_type === 'local' || (j.topic || '').toLowerCase().indexOf('local:') === 0;
+            if (bucket === 'error' || bucket === 'cancelled') {
+                var label = isLocal ? 'Retry' : 'Smart retry';
+                var tip = isLocal
+                    ? 'Re-runs the local scan with the original path and pattern'
+                    : 'LLM rewrites the topic based on the error and queues a new job';
+                retryCell = '<button class="wiki-btn smart-retry-btn" data-job-id="' + j.id + '" style="font-size: 11px; padding: 2px 8px;" title="' + tip + '">' + label + '</button>';
+            }
+            var errTitle = j.error ? ' title="' + escapeHtml(j.error) + '"' : '';
+            html += '<tr' + errTitle + '>'
+                + '<td>' + j.id + '</td>'
+                + '<td style="font-size: 13px;">' + topic + '</td>'
+                + '<td><span class="job-status-badge ' + cls + '">' + statusLabel + '</span></td>'
+                + '<td style="text-align: right;">' + (j.sources || 0) + '</td>'
+                + '<td style="text-align: right;">' + (j.word_count || 0).toLocaleString() + '</td>'
+                + '<td style="font-size: 12px; color: var(--color-text-muted);">' + started + '</td>'
+                + '<td style="font-size: 12px;">' + duration + '</td>'
+                + '<td>' + articleCell + '</td>'
+                + '<td>' + retryCell + '</td>'
+                + '</tr>';
+        });
+        tbody.innerHTML = html;
+    }
+
+    // Event delegation for the per-row smart retry buttons (they come
+    // and go as the table re-renders).
+    tbody.addEventListener('click', async function(event) {
+        var btn = event.target.closest('.smart-retry-btn');
+        if (!btn) return;
+        var jobId = btn.getAttribute('data-job-id');
+        var originalLabel = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Retrying…';
+        try {
+            var r = await fetch('/api/research/smart-retry/' + jobId, {method: 'POST'});
+            var data = await r.json();
+            if (!r.ok) {
+                btn.textContent = 'Error';
+                btn.title = data.detail || 'Retry failed';
+                setTimeout(function() {
+                    btn.textContent = originalLabel;
+                    btn.disabled = false;
+                }, 3000);
+                return;
+            }
+            btn.textContent = '→ #' + data.new_job_id;
+            if (data.failure_mode === 'local_replay') {
+                btn.title = 'Re-ran local scan with original path/pattern';
+            } else if (data.rewritten) {
+                btn.title = 'Rewrote topic from:\n' + data.original_topic
+                    + '\n\nto:\n' + data.new_topic
+                    + '\n\nFailure mode: ' + data.failure_mode;
+            } else {
+                btn.title = 'Requeued unchanged (failure mode: ' + data.failure_mode + ')';
+            }
+            // Trigger a refresh so the new job shows up in the table.
+            setTimeout(fetchJobs, 500);
+        } catch (e) {
+            btn.textContent = 'Error';
+            btn.title = e.message;
+            setTimeout(function() {
+                btn.textContent = originalLabel;
+                btn.disabled = false;
+            }, 3000);
+        }
+    });
+
+    function updateSummary() {
+        var all = mergedJobs();
+        var buckets = {queued: 0, active: 0, awaiting_review: 0, complete: 0, error: 0, cancelled: 0};
+        all.forEach(function(j) {
+            var b = bucketFor(j.status);
+            if (b in buckets) buckets[b]++;
+        });
+        document.getElementById('jobs-total').textContent = all.length;
+        document.getElementById('jobs-queued').textContent = buckets.queued;
+        document.getElementById('jobs-active').textContent = buckets.active;
+        document.getElementById('jobs-review').textContent = buckets.awaiting_review;
+        document.getElementById('jobs-complete').textContent = buckets.complete;
+        document.getElementById('jobs-error').textContent = buckets.error;
+
+        loadedCount.textContent = 'Loaded ' + all.length + (olderExhausted ? ' (all)' : '');
+        loadMoreBtn.style.display = olderExhausted ? 'none' : 'inline-block';
+    }
+
+    async function fetchJobs() {
+        if (inFlight) return;
+        inFlight = true;
+        liveDot.classList.add('pulsing');
+        try {
+            var r = await fetch(
+                '/api/research/jobs?limit=' + JOBS_PAGE_SIZE + '&compact=true',
+                {cache: 'no-store'}
+            );
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            latestJobs = await r.json();
+            updateSummary();
+            render();
+            lastUpdated.textContent = 'Updated ' + new Date().toLocaleTimeString();
+        } catch (e) {
+            lastUpdated.textContent = 'Error: ' + e.message;
+        }
+        inFlight = false;
+        liveDot.classList.remove('pulsing');
+        scheduleNext();
+    }
+
+    async function loadOlder() {
+        if (olderExhausted) return;
+        // Cursor is the smallest id we currently have from live or older.
+        var all = mergedJobs();
+        if (!all.length) return;
+        var minId = all[all.length - 1].id;
+        loadMoreBtn.disabled = true;
+        loadMoreBtn.textContent = 'Loading…';
+        try {
+            var r = await fetch(
+                '/api/research/jobs?limit=' + JOBS_PAGE_SIZE
+                + '&compact=true&before_id=' + minId,
+                {cache: 'no-store'}
+            );
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            var batch = await r.json();
+            if (!batch.length) {
+                olderExhausted = true;
+            } else {
+                olderJobs = olderJobs.concat(batch);
+                if (batch.length < JOBS_PAGE_SIZE) olderExhausted = true;
+            }
+            updateSummary();
+            render();
+        } catch (e) {
+            lastUpdated.textContent = 'Error: ' + e.message;
+        }
+        loadMoreBtn.disabled = false;
+        loadMoreBtn.textContent = 'Load older jobs';
+    }
+
+    loadMoreBtn.addEventListener('click', loadOlder);
+
+    function scheduleNext() {
+        if (timer) { clearTimeout(timer); timer = null; }
+        var rate = parseInt(rateSel.value, 10);
+        if (!rate) return;
+        timer = setTimeout(fetchJobs, rate);
+    }
+
+    // Pause polling when the tab is hidden so we don't burn requests.
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            if (timer) { clearTimeout(timer); timer = null; }
+        } else {
+            fetchJobs();
+        }
+    });
+
+    fetchJobs();
+})();
+
+</script>
+{% endblock %}

@@ -1,0 +1,97 @@
+services:
+  app:
+    container_name: kb-service
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./data:/kb
+    env_file:
+      - .env
+    environment:
+      - KB_ROOT=/kb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - AUTO_DISCOVERY_ENABLED=${AUTO_DISCOVERY_ENABLED:-false}
+      - SERPER_CALLS_PER_JOB_ESTIMATE=${SERPER_CALLS_PER_JOB_ESTIMATE:-8}
+      - ARTICLE_META_INDEX=true
+    depends_on:
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    mem_limit: 2g
+    memswap_limit: 3g
+    cpus: 4.0
+    init: true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8888/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    volumes:
+      - ./data:/kb
+    env_file:
+      - .env
+    environment:
+      - KB_ROOT=/kb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - AUTO_DISCOVERY_ENABLED=${AUTO_DISCOVERY_ENABLED:-false}
+      - SERPER_CALLS_PER_JOB_ESTIMATE=${SERPER_CALLS_PER_JOB_ESTIMATE:-8}
+    depends_on:
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    mem_limit: 1536m
+    memswap_limit: 2g
+    cpus: 2.0
+    init: true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import app.worker"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      replicas: 6
+
+  tailscale:
+    container_name: kb-tailscale
+    image: tailscale/tailscale:latest
+    hostname: wikidelve
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ./ts-serve.json:/config/serve.json:ro
+    cap_add:
+      - net_admin
+      - sys_module
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--self", "--json"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    container_name: kb-redis
+    image: redis:7-alpine
+    mem_limit: 512m
+    cpus: 1.0
+    restart: unless-stopped
+
+volumes:
+  ts-state:

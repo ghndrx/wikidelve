@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block title %}Knowledge Graph{% endblock %}
+
+{% block content %}
+<style nonce="{{ csp_nonce() }}">
+    .graph-container {
+        width: 100%;
+        height: 700px;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface-alt);
+        position: relative;
+    }
+    .graph-entity-detail {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: 320px;
+        max-height: 400px;
+        overflow-y: auto;
+        padding: 14px;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        color: var(--color-text);
+        box-shadow: var(--shadow-md);
+        z-index: 10;
+        border-radius: var(--radius-md);
+    }
+</style>
+
+<h1 class="page-title">Knowledge Graph</h1>
+<p style="margin-bottom: 8px; color: var(--color-text-muted);">Interactive visualization of entities and relationships across your wiki.</p>
+
+<div style="margin-bottom: 12px;">
+    <span id="graph-stats" style="font-size: 13px; color: var(--color-text-subtle);">Loading graph data...</span>
+</div>
+
+<div id="graph-container" class="graph-container">
+    <svg id="graph-svg" style="width: 100%; height: 100%;"></svg>
+</div>
+
+<div style="margin-top: 12px; font-size: 13px; color: var(--color-text-subtle);">
+    <strong>Controls:</strong> Scroll to zoom. Drag nodes to rearrange. Click a node to see related articles.
+</div>
+
+<div id="entity-detail" class="graph-entity-detail" style="display: none;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <h3 id="entity-name" style="margin: 0; font-size: 16px;"></h3>
+        <button id="entity-detail-close" style="background:none;border:none;cursor:pointer;font-size:18px;color: var(--color-text-subtle);">&times;</button>
+    </div>
+    <p id="entity-type" style="margin: 0 0 10px 0; font-size: 12px; color: var(--color-text-subtle);"></p>
+    <div id="entity-articles"></div>
+</div>
+
+<script nonce="{{ csp_nonce() }}" src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script nonce="{{ csp_nonce() }}">
+const TYPE_COLORS = {
+    tool: '#0645ad',
+    framework: '#36c',
+    language: '#2a4b8d',
+    service: '#14866d',
+    concept: '#72777d',
+    protocol: '#aa3377',
+    platform: '#d4351c',
+    database: '#14866d',
+    default: '#54595d'
+};
+
+async function loadGraph() {
+    const resp = await fetch('/api/graph/data');
+    const data = await resp.json();
+
+    const nodes = data.nodes || [];
+    const edges = data.edges || [];
+
+    if (nodes.length === 0) {
+        document.getElementById('graph-stats').textContent = 'No graph data yet. Build the graph first: POST /api/graph/build';
+        return;
+    }
+
+    document.getElementById('graph-stats').textContent =
+        nodes.length + ' entities, ' + edges.length + ' relationships';
+
+    const container = document.getElementById('graph-container');
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+
+    const svg = d3.select('#graph-svg')
+        .attr('viewBox', [0, 0, width, height]);
+
+    // Clear previous
+    svg.selectAll('*').remove();
+
+    const g = svg.append('g');
+
+    // Zoom
+    const zoom = d3.zoom()
+        .scaleExtent([0.1, 4])
+        .on('zoom', (event) => g.attr('transform', event.transform));
+    svg.call(zoom);
+
+    // Build node map for edge lookups
+    const nodeMap = {};
+    nodes.forEach(n => { nodeMap[n.id] = n; });
+
+    // Filter edges to only those with valid nodes
+    const validEdges = edges.filter(e => nodeMap[e.source] && nodeMap[e.target]);
+
+    // Simulation
+    const simulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(validEdges).id(d => d.id).distance(80))
+        .force('charge', d3.forceManyBody().strength(-150))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(20));
+
+    // Edges
+    const link = g.append('g')
+        .selectAll('line')
+        .data(validEdges)
+        .join('line')
+        .attr('stroke', '#c8ccd1')
+        .attr('stroke-width', 1)
+        .attr('stroke-opacity', 0.6);
+
+    // Edge labels
+    const linkLabel = g.append('g')
+        .selectAll('text')
+        .data(validEdges)
+        .join('text')
+        .text(d => d.relationship || '')
+        .attr('font-size', '8px')
+        .attr('fill', '#a2a9b1')
+        .attr('text-anchor', 'middle');
+
+    // Nodes
+    const node = g.append('g')
+        .selectAll('circle')
+        .data(nodes)
+        .join('circle')
+        .attr('r', d => Math.max(5, Math.min(15, (d.article_count || 1) * 2)))
+        .attr('fill', d => TYPE_COLORS[d.type] || TYPE_COLORS.default)
+        .attr('stroke', '#fff')
+        .attr('stroke-width', 1.5)
+        .style('cursor', 'pointer')
+        .call(d3.drag()
+            .on('start', (event, d) => {
+                d._dragged = false;
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x; d.fy = d.y;
+            })
+            .on('drag', (event, d) => {
+                d._dragged = true;
+                d.fx = event.x; d.fy = event.y;
+            })
+            .on('end', async (event, d) => {
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null; d.fy = null;
+                // Only show detail if this was a click, not a drag
+                if (d._dragged) return;
+                await showNodeDetail(event, d);
+            })
+        );
+
+    // Node labels
+    const label = g.append('g')
+        .selectAll('text')
+        .data(nodes)
+        .join('text')
+        .text(d => d.name)
+        .attr('font-size', '10px')
+        .attr('fill', '#202122')
+        .attr('dx', 12)
+        .attr('dy', 4);
+
+    // Tick
+    simulation.on('tick', () => {
+        link
+            .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        linkLabel
+            .attr('x', d => (d.source.x + d.target.x) / 2)
+            .attr('y', d => (d.source.y + d.target.y) / 2);
+        node.attr('cx', d => d.x).attr('cy', d => d.y);
+        label.attr('x', d => d.x).attr('y', d => d.y);
+    });
+}
+
+(function() {
+    var closeBtn = document.getElementById('entity-detail-close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', function() {
+            document.getElementById('entity-detail').style.display = 'none';
+        });
+    }
+})();
+
+async function showNodeDetail(event, d) {
+    // Highlight selected node
+    d3.selectAll('#graph-svg circle').attr('stroke', '#fff').attr('stroke-width', 1.5);
+    d3.select(event.currentTarget).attr('stroke', '#d33').attr('stroke-width', 3);
+
+    // Show panel with loading state
+    document.getElementById('entity-detail').style.display = 'block';
+    document.getElementById('entity-name').textContent = d.name;
+    document.getElementById('entity-type').textContent = 'Type: ' + d.type + ' | Mentioned in ' + (d.article_count || 0) + ' articles';
+    document.getElementById('entity-articles').innerHTML = '<p style="color: var(--color-warning); font-size: 13px;">Loading articles...</p>';
+
+    try {
+        const resp = await fetch('/api/graph/entity/' + encodeURIComponent(d.name));
+        const result = await resp.json();
+        const articlesDiv = document.getElementById('entity-articles');
+        if (result.articles && result.articles.length > 0) {
+            articlesDiv.innerHTML = result.articles.map(a => {
+                var title = a.title || a.slug.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                return '<a href="/wiki/' + (a.kb||'personal') + '/' + a.slug + '" style="display: block; padding: 6px 10px; margin: 4px 0; border: 1px solid var(--color-border-light); background: var(--color-surface); text-decoration: none; color: var(--color-link); font-size: 13px;">' +
+                    '<span style="font-weight: 500;">' + title + '</span>' +
+                    '<span style="display: block; font-size: 11px; color: var(--color-text-subtle); margin-top: 2px;">' + (a.kb||'personal') + '</span></a>';
+            }).join('');
+        } else {
+            articlesDiv.innerHTML = '<p style="color: var(--color-text-subtle); font-size: 13px;">No articles found for this entity.</p>';
+        }
+    } catch (err) {
+        document.getElementById('entity-articles').innerHTML = '<p style="color: var(--color-error); font-size: 13px;">Failed to load: ' + err.message + '</p>';
+    }
+}
+
+loadGraph();
+</script>
+{% endblock %}

@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}Review sources — {{ job.topic | default('Research', true) | e }}{% endblock %}
+
+{% block content %}
+<style nonce="{{ csp_nonce() }}">
+:root {
+    --review-tier1-bg: #d4f4e8;
+    --review-tier2-bg: #fff4d6;
+    --review-tier3-bg: #f0f0f0;
+    --review-selected-bg: #f4faf8;
+    --review-rejected-bg: #fdf6f6;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --review-tier1-bg: #0f2e18;
+        --review-tier2-bg: #3a2c10;
+        --review-tier3-bg: #242830;
+        --review-selected-bg: #102018;
+        --review-rejected-bg: #2a1515;
+    }
+}
+:root[data-theme="dark"] {
+    --review-tier1-bg: #0f2e18;
+    --review-tier2-bg: #3a2c10;
+    --review-tier3-bg: #242830;
+    --review-selected-bg: #102018;
+    --review-rejected-bg: #2a1515;
+}
+
+.review-source-card {
+    border: 1px solid var(--color-border-light);
+    background: var(--color-surface);
+    color: var(--color-text);
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    transition: all 120ms ease;
+}
+.review-source-card.selected { border-color: var(--color-success); background: var(--review-selected-bg); }
+.review-source-card.rejected { border-color: var(--color-error);   background: var(--review-rejected-bg); opacity: 0.6; }
+.review-source-card .toggle {
+    font-size: 18px;
+    line-height: 1;
+    width: 28px;
+    cursor: pointer;
+    user-select: none;
+    text-align: center;
+    flex-shrink: 0;
+}
+.review-source-card .meta { flex: 1; min-width: 0; }
+.review-source-card .title { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+.review-source-card .url { font-size: 11px; color: var(--color-text-subtle); word-break: break-all; margin-bottom: 6px; }
+.review-source-card .snippet { font-size: 12px; color: var(--color-text-muted); }
+.review-tier-badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 0;
+    font-weight: 600;
+    margin-right: 4px;
+    text-transform: uppercase;
+}
+.review-tier-1 { background: var(--review-tier1-bg); color: var(--color-success); }
+.review-tier-2 { background: var(--review-tier2-bg); color: var(--color-warning); }
+.review-tier-3 { background: var(--review-tier3-bg); color: var(--color-text-muted); }
+.review-summary-bar {
+    position: sticky;
+    top: 0;
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    padding: 8px 0;
+    margin-bottom: 16px;
+    z-index: 10;
+}
+</style>
+
+<!-- Breadcrumbs -->
+<div class="breadcrumbs">
+    <a href="/">Main page</a><span class="sep">&gt;</span><a href="/research">Research</a><span class="sep">&gt;</span><span>Review sources</span>
+</div>
+
+<h1 class="page-title">Review sources</h1>
+
+<div class="infobox" style="margin-bottom: 16px;">
+    <div class="infobox-title">{{ job.topic | default('?', true) | e }}</div>
+    <table>
+        <tr><th>Job</th><td>#{{ job.id }}</td></tr>
+        <tr><th>Status</th><td>{{ job.status | e }}</td></tr>
+        {% if job.created_at %}
+        <tr><th>Created</th><td>{{ job.created_at | e }}</td></tr>
+        {% endif %}
+        <tr><th>Sources</th><td>{{ sources | length }}</td></tr>
+    </table>
+</div>
+
+{% if job.status != 'awaiting_review' %}
+<div style="border-left: 3px solid var(--color-warning); background: color-mix(in srgb, var(--color-warning) 8%, transparent); padding: 8px 12px; margin-bottom: 16px;">
+    <strong>Note:</strong> this job is in status <code>{{ job.status | e }}</code>, not <code>awaiting_review</code>.
+    Source selection changes will not be accepted; the synthesize button is hidden.
+</div>
+{% endif %}
+
+<div class="review-summary-bar">
+    <div style="display: flex; gap: 12px; align-items: center;">
+        <span><strong id="rv-selected-count">0</strong> / <strong>{{ sources | length }}</strong> selected</span>
+        <span style="flex: 1;"></span>
+        <button class="wiki-btn" type="button" onclick="rvSelectAll(true)">Select all</button>
+        <button class="wiki-btn" type="button" onclick="rvSelectAll(false)">Reject all</button>
+        {% if job.status == 'awaiting_review' %}
+        <label style="font-size: 13px;">KB:
+            <select id="rv-kb" class="wiki-input" style="width: 130px;">
+                {% for kb in kb_names %}
+                <option value="{{ kb | e }}" {% if kb == 'personal' %}selected{% endif %}>{{ kb | e }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button class="wiki-btn wiki-btn-primary" type="button" onclick="rvSynthesize(this)">
+            Synthesize selected
+        </button>
+        {% endif %}
+    </div>
+    <div id="rv-status" style="font-size: 12px; color: var(--color-text-subtle); margin-top: 4px;"></div>
+</div>
+
+{% for tier_num in [1, 2, 3] %}
+{% set tier_sources = sources | selectattr('tier', 'equalto', tier_num) | list %}
+{% if tier_sources %}
+<h2 class="section-heading">
+    <span class="review-tier-badge review-tier-{{ tier_num }}">Tier {{ tier_num }}</span>
+    {% if tier_num == 1 %}Authoritative{% elif tier_num == 2 %}Reputable{% else %}General{% endif %}
+    <span style="font-weight: normal; font-size: 13px; color: var(--color-text-subtle);">({{ tier_sources | length }})</span>
+</h2>
+{% for src in tier_sources %}
+<div class="review-source-card {% if src.selected %}selected{% else %}rejected{% endif %}"
+     data-source-id="{{ src.id }}"
+     data-selected="{% if src.selected %}1{% else %}0{% endif %}">
+    <div class="toggle" onclick="rvToggle({{ src.id }})">
+        <span class="toggle-icon">{% if src.selected %}★{% else %}✗{% endif %}</span>
+    </div>
+    <div class="meta">
+        <div class="title">{{ src.title | default('(no title)', true) | e }}</div>
+        <div class="url"><a href="{{ src.url | e }}" target="_blank" rel="noopener">{{ src.url | e }}</a></div>
+        {% if src.content %}
+        <div class="snippet">{{ src.content | e }}</div>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{% if not sources %}
+<p style="color: var(--color-text-subtle);">No sources collected for this job.</p>
+{% endif %}
+
+<div style="border-top: 1px solid var(--color-border-light); padding-top: 12px; margin-top: 24px;">
+    <a href="/research">&larr; Back to research</a>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+const RV_JOB_ID = {{ job.id }};
+const RV_AWAITING = {% if job.status == 'awaiting_review' %}true{% else %}false{% endif %};
+
+function rvUpdateCount() {
+    const cards = document.querySelectorAll('.review-source-card');
+    let n = 0;
+    cards.forEach(c => { if (c.dataset.selected === '1') n++; });
+    document.getElementById('rv-selected-count').textContent = n;
+}
+
+function rvSetCardState(card, selected) {
+    card.dataset.selected = selected ? '1' : '0';
+    card.classList.toggle('selected', selected);
+    card.classList.toggle('rejected', !selected);
+    const icon = card.querySelector('.toggle-icon');
+    if (icon) icon.textContent = selected ? '★' : '✗';
+}
+
+async function rvToggle(sourceId) {
+    if (!RV_AWAITING) return;
+    const card = document.querySelector('[data-source-id="' + sourceId + '"]');
+    if (!card) return;
+    const newState = card.dataset.selected !== '1';
+    rvSetCardState(card, newState);
+    rvUpdateCount();
+    try {
+        await fetch('/api/research/sources/' + RV_JOB_ID, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source_ids: [sourceId], selected: newState }),
+        });
+    } catch (e) {
+        document.getElementById('rv-status').textContent = 'Failed to save: ' + e.message;
+    }
+}
+
+async function rvSelectAll(selected) {
+    if (!RV_AWAITING) return;
+    document.querySelectorAll('.review-source-card').forEach(c => rvSetCardState(c, selected));
+    rvUpdateCount();
+    try {
+        await fetch('/api/research/sources/' + RV_JOB_ID, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ select_all: selected }),
+        });
+    } catch (e) {
+        document.getElementById('rv-status').textContent = 'Failed to save: ' + e.message;
+    }
+}
+
+async function rvSynthesize(btn) {
+    if (!RV_AWAITING) return;
+    btn.disabled = true;
+    btn.textContent = 'Queuing...';
+    const kb = document.getElementById('rv-kb').value || 'personal';
+    const statusEl = document.getElementById('rv-status');
+    try {
+        const resp = await fetch('/api/research/synthesize/' + RV_JOB_ID, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kb: kb }),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            statusEl.textContent = 'Synthesis queued for ' + kb + '. Reload to see progress.';
+            btn.textContent = 'Queued';
+        } else {
+            statusEl.textContent = 'Error: ' + (data.detail || resp.statusText);
+            btn.disabled = false;
+            btn.textContent = 'Synthesize selected';
+        }
+    } catch (e) {
+        statusEl.textContent = 'Network error: ' + e.message;
+        btn.disabled = false;
+        btn.textContent = 'Synthesize selected';
+    }
+}
+
+rvUpdateCount();
+</script>
+{% endblock %}

@@ -1,0 +1,21 @@
+# Dev/test dependencies.
+#
+# Install via `pip install -r requirements-dev.txt` in the project venv.
+# These are not shipped in the runtime image — the Dockerfile only
+# installs requirements.txt.
+
+# Unit + parity test tooling
+pytest==8.3.*
+pytest-asyncio==0.23.*
+pytest-cov==5.0.*
+pytest-benchmark==4.0.*
+
+# Backend mocks used by tests/parity/ and tests/unit/test_*_providers.py
+# moto[s3,dynamodb] brings a local in-memory replica of both services.
+# respx intercepts httpx calls for the LLM + Serper test suites.
+moto[s3,dynamodb]==5.0.*
+respx==0.21.*
+
+# Playwright is already installed for tests/e2e/ but pinning here so
+# `pip install -r requirements-dev.txt` gets everything in one shot.
+pytest-playwright==0.5.*
