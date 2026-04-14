@@ -141,7 +141,9 @@ async def check_article_quality(kb: str, slug: str) -> str:
     Use this after writing an article to verify quality."""
     from app.quality import score_article_quality
 
-    result = await score_article_quality(kb, slug)
+    # score_article_quality is sync — awaiting its dict result
+    # raised TypeError and crashed 3/5 pilot runs. Don't await it.
+    result = score_article_quality(kb, slug)
     if not result:
         return f"Could not score article: {kb}/{slug}"
     return json.dumps(result, indent=2, default=str)
@@ -161,9 +163,11 @@ async def enrich_article(kb: str, slug: str) -> str:
 async def add_crosslinks(kb: str, slug: str) -> str:
     """Add [[Wikilinks]] to related articles within the article content.
     Use this after writing an article to connect it to the rest of the KB."""
-    from app.quality import crosslink_article
+    # Function is named add_crosslinks in quality.py — rename on
+    # import so the tool name stays user-friendly.
+    from app.quality import add_crosslinks as _add_crosslinks
 
-    result = await crosslink_article(kb, slug)
+    result = await _add_crosslinks(kb, slug)
     return json.dumps(result, indent=2, default=str)
 
 
