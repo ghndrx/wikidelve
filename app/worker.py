@@ -262,8 +262,25 @@ async def local_research_task(
     # Auto-add to wiki
     content = job.get("content", "")
     if content:
+        # Recover the frontmatter-ready source_meta that run_local_research
+        # stashed in source_params. Back-compat: older rows have only
+        # {path, pattern}; missing source_meta just means no backlink
+        # fields in frontmatter — the markdown appendix is still in the
+        # content body regardless.
+        import json as _json
+        source_meta = None
+        raw_params = job.get("source_params")
+        if raw_params:
+            try:
+                parsed = _json.loads(raw_params) or {}
+                source_meta = parsed.get("source_meta") or None
+            except (TypeError, ValueError):
+                source_meta = None
         try:
-            slug, change_type = await create_or_update_article("personal", topic, content, source_type="local")
+            slug, change_type = await create_or_update_article(
+                "personal", topic, content,
+                source_type="local", source_meta=source_meta,
+            )
             await db.update_job(
                 job_id, added_to_wiki=1, wiki_slug=slug, wiki_kb="personal",
             )
@@ -455,7 +472,18 @@ async def local_research_cron_task(ctx: dict) -> dict:
             await run_local_research(topic, path, job_id, file_pattern=pattern)
             job = await db.get_job(job_id)
             if job and job.get("content"):
-                slug, change_type = await create_or_update_article("personal", topic, job["content"], source_type="local")
+                # Mirror the frontmatter-stamping the non-cron path does.
+                source_meta = None
+                if job.get("source_params"):
+                    try:
+                        parsed = _json.loads(job["source_params"]) or {}
+                        source_meta = parsed.get("source_meta") or None
+                    except (TypeError, ValueError):
+                        source_meta = None
+                slug, change_type = await create_or_update_article(
+                    "personal", topic, job["content"],
+                    source_type="local", source_meta=source_meta,
+                )
                 await db.update_job(
                     job_id, added_to_wiki=1, wiki_slug=slug, wiki_kb="personal",
                 )

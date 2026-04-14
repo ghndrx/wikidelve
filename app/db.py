@@ -371,7 +371,7 @@ async def create_job(
 _JOB_UPDATE_FIELDS = frozenset({
     "status", "error", "sources_count", "word_count", "content",
     "completed_at", "added_to_wiki", "topic", "kb", "claims_json",
-    "wiki_slug", "wiki_kb", "created_at",
+    "wiki_slug", "wiki_kb", "created_at", "source_params",
 })
 
 

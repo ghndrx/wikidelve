@@ -10,6 +10,7 @@ import logging
 import markdown as md_lib
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from typing import Optional
 
 from app import storage
 
@@ -466,10 +467,26 @@ def extract_title(content: str, fallback: str = "") -> str:
     return fallback
 
 
-def create_article(kb_name: str, topic: str, content: str, source_type: str = "web") -> str:
+def _format_frontmatter_value(v) -> str:
+    """Quote a frontmatter scalar safely. Keeps strings that contain
+    colons / quotes / newlines valid YAML."""
+    s = str(v)
+    if any(ch in s for ch in (":", '"', "\n", "#")):
+        return '"' + s.replace('"', '\\"') + '"'
+    return s
+
+
+def create_article(
+    kb_name: str, topic: str, content: str, source_type: str = "web",
+    *, source_meta: Optional[dict] = None,
+) -> str:
     """Create a new wiki article with frontmatter. Returns the slug.
 
     source_type: "web", "local", "media", or "manual"
+    source_meta: optional dict of ``source_*`` fields (repo, branch,
+        commit, homepage, docs, etc.) to stamp into frontmatter for
+        deterministic backlinks. Callers build this via
+        ``local_research.build_source_meta()``.
     """
     storage.init_kb(kb_name)
 
@@ -493,6 +510,29 @@ def create_article(kb_name: str, topic: str, content: str, source_type: str = "w
     if len(first_line) > 200:
         first_line = first_line[:197] + "..."
 
+    # Deterministic ordering of source_* keys so diffs stay tidy across
+    # re-syntheses. Unknown source_* keys go at the end, alphabetical.
+    source_lines = ""
+    if source_meta:
+        preferred_order = [
+            "source_repo", "source_branch", "source_commit",
+            "source_repo_subpath", "source_path",
+            "source_homepage", "source_docs", "source_issues",
+            "source_npm", "source_pypi", "source_crates", "source_go_module",
+        ]
+        seen = set()
+        ordered_items = []
+        for k in preferred_order:
+            if k in source_meta and source_meta[k]:
+                ordered_items.append((k, source_meta[k]))
+                seen.add(k)
+        for k in sorted(source_meta):
+            if k not in seen and source_meta[k] and k.startswith("source_"):
+                ordered_items.append((k, source_meta[k]))
+        source_lines = "".join(
+            f"{k}: {_format_frontmatter_value(v)}\n" for k, v in ordered_items
+        )
+
     frontmatter = (
         f"---\n"
         f'title: "{title}"\n'
@@ -500,6 +540,7 @@ def create_article(kb_name: str, topic: str, content: str, source_type: str = "w
         f"created: {today}\n"
         f"updated: {today}\n"
         f"source_type: {source_type}\n"
+        f"{source_lines}"
         f"source_files:\n"
         f"  - raw/{slug}.md\n"
         f"tags: [{', '.join(tags)}]\n"
@@ -550,7 +591,10 @@ def _write_through_meta_index(kb: str, slug: str, text: str) -> None:
             logger.debug("meta-index: sync run failed for %s/%s: %s", kb, slug, exc)
 
 
-async def update_article(kb_name: str, slug: str, new_content: str) -> str:
+async def update_article(
+    kb_name: str, slug: str, new_content: str,
+    *, source_meta: Optional[dict] = None,
+) -> str:
     """Merge new research content into an existing wiki article.
 
     Finds the article by slug, appends new findings under a
@@ -590,6 +634,14 @@ async def update_article(kb_name: str, slug: str, new_content: str) -> str:
     # Update the frontmatter date
     meta["updated"] = today
 
+    # Stamp/refresh source_* fields if the caller supplied them. New
+    # values overwrite old ones (e.g. commit SHA advances as the repo
+    # moves) but keys not re-supplied are preserved.
+    if source_meta:
+        for k, v in source_meta.items():
+            if k.startswith("source_") and v:
+                meta[k] = v
+
     # Append under "## Recent Updates" section
     update_header = "## Recent Updates"
     date_header = f"### {today}"
@@ -614,6 +666,7 @@ async def update_article(kb_name: str, slug: str, new_content: str) -> str:
 
 async def create_or_update_article(
     kb_name: str, topic: str, content: str, source_type: str = "web",
+    *, source_meta: Optional[dict] = None,
 ) -> tuple[str, str]:
     """Smart create-or-merge: find related article, update if exists, create otherwise.
 
@@ -621,10 +674,14 @@ async def create_or_update_article(
     """
     existing = find_related_article(kb_name, topic)
     if existing:
-        slug = await update_article(kb_name, existing["slug"], content)
+        slug = await update_article(
+            kb_name, existing["slug"], content, source_meta=source_meta,
+        )
         return slug, "updated"
     else:
-        slug = create_article(kb_name, topic, content, source_type=source_type)
+        slug = create_article(
+            kb_name, topic, content, source_type=source_type, source_meta=source_meta,
+        )
         return slug, "created"
 
 

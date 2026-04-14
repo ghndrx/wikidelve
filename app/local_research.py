@@ -269,18 +269,398 @@ def get_git_context(path: Path) -> Optional[dict]:
     except Exception:
         pass
 
-    # Repo description from remote
+    # Remote URL — prefer origin, fall back to upstream / any other
+    # configured remote. Repos with no remotes return (None, None) and
+    # the backlink section just omits the repo link.
+    remote_name, remote_url = _pick_git_remote(git_dir)
+    if remote_url:
+        context["remote_url"] = remote_url
+        context["remote_name"] = remote_name
+
+    # Exact commit the scan sees — lets the wiki backlink to the
+    # precise state the article was synthesized from, even if the
+    # branch moves on later.
     try:
         result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
+            ["git", "rev-parse", "HEAD"],
             cwd=git_dir, capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0:
-            context["remote_url"] = result.stdout.strip()
+            context["commit"] = result.stdout.strip()
     except Exception:
         pass
 
     return context
+
+
+_PREFERRED_REMOTES = ("origin", "upstream")
+
+
+def _pick_git_remote(git_root: Path) -> tuple[Optional[str], Optional[str]]:
+    """Return (remote_name, url) for the best available remote.
+
+    Tries ``origin`` then ``upstream``, then falls back to the first
+    remote in ``git remote``. Returns (None, None) if the repo has no
+    remotes at all (common for fresh ``git init`` directories — the
+    backlink just becomes a local-only marker in that case).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "remote"], cwd=git_root, capture_output=True,
+            text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None, None
+        remotes = [r.strip() for r in result.stdout.splitlines() if r.strip()]
+    except Exception:
+        return None, None
+    if not remotes:
+        return None, None
+    ordered = [r for r in _PREFERRED_REMOTES if r in remotes] + [
+        r for r in remotes if r not in _PREFERRED_REMOTES
+    ]
+    for name in ordered:
+        try:
+            result = subprocess.run(
+                ["git", "remote", "get-url", name],
+                cwd=git_root, capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return name, result.stdout.strip()
+        except Exception:
+            continue
+    return None, None
+
+
+def _normalize_git_remote(url: str) -> Optional[str]:
+    """Convert a git remote URL to an HTTPS form suitable for linking.
+
+    Handles the three common forms:
+      git@github.com:owner/repo.git        → https://github.com/owner/repo
+      ssh://git@github.com/owner/repo.git  → https://github.com/owner/repo
+      https://github.com/owner/repo.git    → https://github.com/owner/repo
+
+    Returns None if the URL doesn't parse into something we can link
+    (file://, unknown scheme, malformed input). Strips the trailing
+    ``.git`` suffix uniformly since neither GitHub, GitLab, nor
+    Bitbucket require it for web views.
+    """
+    if not url:
+        return None
+    url = url.strip()
+
+    # SCP-style SSH: git@host:path
+    if url.startswith("git@") and ":" in url and "://" not in url:
+        host_and_path = url[len("git@"):]
+        host, _, path = host_and_path.partition(":")
+        if not host or not path:
+            return None
+        url = f"https://{host}/{path}"
+    # ssh:// form
+    elif url.startswith("ssh://git@"):
+        url = "https://" + url[len("ssh://git@"):]
+    elif url.startswith("ssh://"):
+        url = "https://" + url[len("ssh://"):]
+    elif url.startswith("git://"):
+        url = "https://" + url[len("git://"):]
+    # file:// or other schemes — not linkable
+    elif not (url.startswith("https://") or url.startswith("http://")):
+        return None
+
+    if url.endswith(".git"):
+        url = url[:-4]
+    return url
+
+
+def _blob_url_template(remote_https: str, commit: Optional[str]) -> Optional[str]:
+    """Return a format string for per-file deep links, or None if the
+    host isn't recognised. Callers do ``template.format(path=rel_path)``.
+
+    Only emits a template when we have a commit SHA — branch-based
+    links are permanently broken once the branch moves.
+    """
+    if not remote_https or not commit:
+        return None
+    # github.com, gitlab.com, bitbucket.org, and common self-hosted
+    # GitLab / Gitea mirrors all use /blob/<ref>/<path> or /src/<ref>/<path>.
+    # We only emit for the three hosts where we're sure of the path
+    # format — others get no per-file links but still get the repo link.
+    if "github.com" in remote_https:
+        return remote_https + "/blob/" + commit + "/{path}"
+    if "gitlab" in remote_https:
+        return remote_https + "/-/blob/" + commit + "/{path}"
+    if "bitbucket.org" in remote_https:
+        return remote_https + "/src/" + commit + "/{path}"
+    return None
+
+
+def _tree_url(remote_https: str, commit: str, subpath: str = "") -> Optional[str]:
+    """Build a directory-tree URL for github/gitlab/bitbucket. Subpath
+    makes a monorepo scan land in the right subdir, not the repo root.
+    """
+    subpath = subpath.strip("/")
+    tail = f"/{subpath}" if subpath else ""
+    if "github.com" in remote_https:
+        return f"{remote_https}/tree/{commit}{tail}"
+    if "gitlab" in remote_https:
+        return f"{remote_https}/-/tree/{commit}{tail}"
+    if "bitbucket.org" in remote_https:
+        return f"{remote_https}/src/{commit}{tail}"
+    return None
+
+
+def _probe_manifest(scan_dir: Path) -> dict:
+    """Probe language-specific manifest files for URLs that complement
+    a git remote. These fill in homepage / docs / issue-tracker fields
+    without overriding the git ground-truth for source_repo.
+
+    Silent-best-effort: every parse failure is ignored, since a broken
+    manifest isn't a research-blocker.
+    """
+    found: dict = {}
+
+    # Node: package.json
+    pkg_json = scan_dir / "package.json"
+    if pkg_json.is_file():
+        try:
+            import json as _json
+            data = _json.loads(pkg_json.read_text(encoding="utf-8", errors="ignore"))
+            if isinstance(data, dict):
+                if isinstance(data.get("homepage"), str):
+                    found.setdefault("source_homepage", data["homepage"].strip())
+                repo = data.get("repository")
+                if isinstance(repo, str):
+                    found.setdefault("source_repo_hint", repo.strip())
+                elif isinstance(repo, dict) and isinstance(repo.get("url"), str):
+                    found.setdefault("source_repo_hint", repo["url"].strip())
+                bugs = data.get("bugs")
+                if isinstance(bugs, str):
+                    found.setdefault("source_issues", bugs.strip())
+                elif isinstance(bugs, dict) and isinstance(bugs.get("url"), str):
+                    found.setdefault("source_issues", bugs["url"].strip())
+                name = data.get("name")
+                if isinstance(name, str) and name:
+                    # Scoped + unscoped both resolve on npmjs.
+                    found.setdefault("source_npm", f"https://www.npmjs.com/package/{name}")
+        except Exception:
+            pass
+
+    # Python: pyproject.toml (PEP 621 [project.urls])
+    pyproject = scan_dir / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            try:
+                import tomllib  # py3.11+
+            except ImportError:  # pragma: no cover — only on <3.11
+                import tomli as tomllib  # type: ignore
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8", errors="ignore"))
+            project = data.get("project", {}) if isinstance(data, dict) else {}
+            urls = project.get("urls", {}) if isinstance(project, dict) else {}
+            if isinstance(urls, dict):
+                # Keys are case/naming-inconsistent in the wild — check
+                # a few common spellings for each field.
+                def _pick(keys: tuple[str, ...]) -> Optional[str]:
+                    for k in urls:
+                        if k.lower() in keys and isinstance(urls[k], str):
+                            return urls[k].strip()
+                    return None
+                hp = _pick(("homepage", "home-page", "home"))
+                if hp:
+                    found.setdefault("source_homepage", hp)
+                repo = _pick(("repository", "source", "source code"))
+                if repo:
+                    found.setdefault("source_repo_hint", repo)
+                docs = _pick(("documentation", "docs"))
+                if docs:
+                    found.setdefault("source_docs", docs)
+                issues = _pick(("issues", "issue tracker", "bug tracker", "bugs", "tracker"))
+                if issues:
+                    found.setdefault("source_issues", issues)
+            name = project.get("name") if isinstance(project, dict) else None
+            if isinstance(name, str) and name:
+                found.setdefault("source_pypi", f"https://pypi.org/project/{name}/")
+        except Exception:
+            pass
+
+    # Rust: Cargo.toml
+    cargo = scan_dir / "Cargo.toml"
+    if cargo.is_file():
+        try:
+            try:
+                import tomllib
+            except ImportError:  # pragma: no cover
+                import tomli as tomllib  # type: ignore
+            data = tomllib.loads(cargo.read_text(encoding="utf-8", errors="ignore"))
+            pkg = data.get("package", {}) if isinstance(data, dict) else {}
+            if isinstance(pkg, dict):
+                for key, field in (
+                    ("repository", "source_repo_hint"),
+                    ("homepage", "source_homepage"),
+                    ("documentation", "source_docs"),
+                ):
+                    val = pkg.get(key)
+                    if isinstance(val, str) and val.strip():
+                        found.setdefault(field, val.strip())
+                name = pkg.get("name")
+                if isinstance(name, str) and name:
+                    found.setdefault("source_crates", f"https://crates.io/crates/{name}")
+        except Exception:
+            pass
+
+    # Go: go.mod — the first line's module path implies a source URL.
+    go_mod = scan_dir / "go.mod"
+    if go_mod.is_file():
+        try:
+            first = go_mod.read_text(encoding="utf-8", errors="ignore").splitlines()[0].strip()
+            if first.startswith("module "):
+                module = first[len("module "):].strip()
+                if module:
+                    found.setdefault("source_go_module", module)
+                    # github.com/foo/bar → https://github.com/foo/bar
+                    if module.startswith(("github.com/", "gitlab.com/", "bitbucket.org/")):
+                        # Trim to owner/repo (strip submodule paths).
+                        parts = module.split("/")
+                        if len(parts) >= 3:
+                            found.setdefault(
+                                "source_repo_hint",
+                                f"https://{parts[0]}/{parts[1]}/{parts[2]}",
+                            )
+        except Exception:
+            pass
+
+    return found
+
+
+def _probe_override(scan_dir: Path) -> dict:
+    """Read a ``.wikidelve.yml`` / ``.wikidelve.yaml`` override file.
+
+    Lets users stamp canonical URLs on folders that aren't git repos
+    (Obsidian vaults, shared doc directories, SMB mounts, etc.).
+    Any top-level key starting with ``source_`` is accepted verbatim.
+    Trusted because this file is on the user's own filesystem.
+    """
+    for name in (".wikidelve.yml", ".wikidelve.yaml"):
+        f = scan_dir / name
+        if not f.is_file():
+            continue
+        try:
+            import yaml  # pyyaml is already a dep for frontmatter
+            data = yaml.safe_load(f.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            k: str(v).strip()
+            for k, v in data.items()
+            if isinstance(k, str) and k.startswith("source_") and isinstance(v, (str, int, float)) and str(v).strip()
+        }
+    return {}
+
+
+def build_source_meta(
+    scan_path: str,
+    git_context: Optional[dict],
+) -> tuple[dict, str]:
+    """Build (frontmatter_fields, markdown_appendix) for the source-of-record.
+
+    Precedence (earlier entries win on key conflicts):
+      1. ``.wikidelve.yml`` explicit override — user knows best
+      2. Git context — ground-truth repo URL, branch, commit
+      3. Language manifests — complementary URLs (homepage, docs, issues)
+
+    Frontmatter keys are prefixed ``source_`` so they sort together.
+    The appendix is deterministic markdown — does not go through the
+    LLM, so the links are always present and always correct.
+    """
+    scan_dir = Path(scan_path)
+    meta: dict = {"source_path": scan_path}
+    lines = ["## Source", "", f"- **Scanned path**: `{scan_path}`"]
+
+    # 1. Override file gets first dibs on every key.
+    override = _probe_override(scan_dir) if scan_dir.is_dir() else {}
+    for k, v in override.items():
+        meta.setdefault(k, v)
+
+    # 2. Git context — compute subpath-within-repo so monorepo scans
+    # deep-link into the right subdir instead of the repo root.
+    git_root_str = (git_context or {}).get("git_root")
+    subpath = ""
+    if git_root_str and scan_dir.is_dir():
+        try:
+            subpath = str(scan_dir.resolve().relative_to(Path(git_root_str).resolve()))
+            if subpath == ".":
+                subpath = ""
+        except (ValueError, OSError):
+            subpath = ""
+
+    branch = (git_context or {}).get("branch")
+    commit = (git_context or {}).get("commit")
+    remote_raw = (git_context or {}).get("remote_url")
+    remote_https = _normalize_git_remote(remote_raw) if remote_raw else None
+
+    if branch:
+        meta.setdefault("source_branch", branch)
+    if commit:
+        meta.setdefault("source_commit", commit)
+    if subpath:
+        meta.setdefault("source_repo_subpath", subpath)
+    if remote_https:
+        meta.setdefault("source_repo", remote_https)
+    elif remote_raw:
+        meta.setdefault("source_repo", remote_raw)
+
+    # 3. Language manifests — only fill complementary fields.
+    if scan_dir.is_dir():
+        for k, v in _probe_manifest(scan_dir).items():
+            meta.setdefault(k, v)
+        # Walk up to the git root for manifests too — monorepos often
+        # keep package.json / pyproject at the workspace root.
+        if git_root_str and str(scan_dir.resolve()) != str(Path(git_root_str).resolve()):
+            for k, v in _probe_manifest(Path(git_root_str)).items():
+                meta.setdefault(k, v)
+
+    # If git didn't give us a source_repo, fall back to any hint the
+    # manifests picked up (e.g. package.json repository URL).
+    hint = meta.pop("source_repo_hint", None)
+    if hint:
+        hint_https = _normalize_git_remote(hint) or hint
+        meta.setdefault("source_repo", hint_https)
+
+    # --- Build the appendix, in a fixed order for readability ------------
+    if meta.get("source_branch"):
+        lines.append(f"- **Branch**: `{meta['source_branch']}`")
+    if meta.get("source_commit"):
+        lines.append(f"- **Commit**: `{meta['source_commit'][:12]}`")
+    if meta.get("source_repo_subpath"):
+        lines.append(f"- **Repo subpath**: `{meta['source_repo_subpath']}`")
+    repo = meta.get("source_repo")
+    if repo and (repo.startswith("https://") or repo.startswith("http://")):
+        link = repo
+        if commit:
+            tree = _tree_url(repo, commit, subpath)
+            if tree:
+                link = tree
+        lines.append(f"- **Repo**: [{repo}]({link})")
+    elif repo:
+        lines.append(f"- **Repo**: `{repo}`")
+    if meta.get("source_homepage"):
+        lines.append(f"- **Homepage**: {meta['source_homepage']}")
+    if meta.get("source_docs"):
+        lines.append(f"- **Docs**: {meta['source_docs']}")
+    if meta.get("source_issues"):
+        lines.append(f"- **Issues**: {meta['source_issues']}")
+    for label, key in (
+        ("npm", "source_npm"),
+        ("PyPI", "source_pypi"),
+        ("crates.io", "source_crates"),
+        ("Go module", "source_go_module"),
+    ):
+        if meta.get(key):
+            lines.append(f"- **{label}**: {meta[key]}")
+
+    lines.append("")
+    return meta, "\n".join(lines) + "\n"
 
 
 def _find_git_root(path: Path) -> Optional[Path]:
@@ -505,6 +885,13 @@ Write a structured article covering:
         )
         return
 
+    # Deterministic source appendix — built from git metadata, NOT the
+    # LLM, so the repo backlink is always present and always correct.
+    # Frontmatter fields ride along via source_params so the worker's
+    # create_or_update_article call can stamp them onto the wiki article.
+    source_frontmatter, source_markdown = build_source_meta(path, git_context)
+    content = content.rstrip() + "\n\n" + source_markdown
+
     # --- Step 6: Write output ---
     await db.update_job(job_id, status="writing")
 
@@ -532,6 +919,19 @@ Write a structured article covering:
     ]
     await db.save_sources(job_id, sources, round_num=1)
 
+    # Extend the job's source_params with source_meta so the worker
+    # (which only sees the DB row, not this function's locals) can
+    # stamp the git fields onto the wiki article's frontmatter.
+    import json as _json
+    job_row = await db.get_job(job_id)
+    existing_params = {}
+    if job_row and job_row.get("source_params"):
+        try:
+            existing_params = _json.loads(job_row["source_params"]) or {}
+        except (TypeError, ValueError):
+            existing_params = {}
+    existing_params["source_meta"] = source_frontmatter
+
     await db.update_job(
         job_id,
         status="complete",
@@ -539,6 +939,7 @@ Write a structured article covering:
         sources_count=len(top_files),
         word_count=len(content.split()),
         content=content,
+        source_params=_json.dumps(existing_params),
     )
     logger.info(
         "Local research [%d] complete: %d files, %d words",
