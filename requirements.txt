@@ -49,6 +49,7 @@ keyring==25.7.0
 limits==5.8.0
 Markdown==3.10.2
 markdown-it-py==4.0.0
+xhtml2pdf==0.2.16
 MarkupSafe==3.0.3
 mcp==1.27.0
 mdurl==0.1.2

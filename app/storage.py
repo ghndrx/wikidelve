@@ -82,6 +82,24 @@ class LocalStorage:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
 
+    def read_binary(self, kb: str, rel_path: str) -> bytes | None:
+        """Binary read for documents (rendered PDFs etc.). Returns
+        None if the file doesn't exist; logs and returns None on
+        OSError so callers don't have to wrap every fetch in try."""
+        p = self._path(kb, rel_path)
+        if not p.exists():
+            return None
+        try:
+            return p.read_bytes()
+        except OSError as exc:
+            logger.warning("LocalStorage read_binary failed %s: %s", p, exc)
+            return None
+
+    def write_binary(self, kb: str, rel_path: str, blob: bytes) -> None:
+        p = self._path(kb, rel_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(blob)
+
     def delete(self, kb: str, rel_path: str) -> bool:
         p = self._path(kb, rel_path)
         if not p.exists():
@@ -196,6 +214,38 @@ class S3Storage:
             Key=key,
             Body=content.encode("utf-8"),
             ContentType="text/markdown; charset=utf-8",
+        )
+
+    def read_binary(self, kb: str, rel_path: str) -> bytes | None:
+        key = self._key(kb, rel_path)
+        try:
+            resp = self._client.get_object(Bucket=self.bucket, Key=key)
+            return resp["Body"].read()
+        except self._client.exceptions.NoSuchKey:
+            return None
+        except Exception as exc:
+            code = getattr(getattr(exc, "response", {}), "get", lambda *_: {})("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "404", "NotFound"):
+                return None
+            logger.warning("S3 get_object (binary) failed %s: %s", key, exc)
+            return None
+
+    def write_binary(self, kb: str, rel_path: str, blob: bytes) -> None:
+        key = self._key(kb, rel_path)
+        # Pick MIME from extension since binary writes go through a
+        # generic API; defaulting to octet-stream is fine for
+        # opaque artifacts but PDFs benefit from the right type.
+        ext = rel_path.rsplit(".", 1)[-1].lower() if "." in rel_path else ""
+        mime = {
+            "pdf": "application/pdf",
+            "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+        }.get(ext, "application/octet-stream")
+        self._client.put_object(
+            Bucket=self.bucket, Key=key, Body=blob, ContentType=mime,
         )
 
     def delete(self, kb: str, rel_path: str) -> bool:
@@ -353,6 +403,27 @@ def set_storage(storage: Storage) -> None:
 
 def read_text(kb: str, rel_path: str) -> str | None:
     return get_storage().read_text(kb, rel_path)
+
+
+def read_binary(kb: str, rel_path: str) -> bytes | None:
+    """Module-level binary read. Falls back to None if the active
+    backend doesn't expose a read_binary method (older S3Storage in
+    legacy deploys)."""
+    backend = get_storage()
+    fn = getattr(backend, "read_binary", None)
+    if fn is None:
+        return None
+    return fn(kb, rel_path)
+
+
+def write_binary(kb: str, rel_path: str, blob: bytes) -> None:
+    backend = get_storage()
+    fn = getattr(backend, "write_binary", None)
+    if fn is None:
+        raise AttributeError(
+            "active storage backend does not support binary writes"
+        )
+    fn(kb, rel_path, blob)
 
 
 def write_text(kb: str, rel_path: str, content: str) -> None:

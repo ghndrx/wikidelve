@@ -406,12 +406,27 @@ def discard_pending_draft(kb: str, slug: str) -> bool:
 def commit_pending_draft(
     kb: str, slug: str, *, trigger: str = "user committed pending draft",
     rendered: Optional[bytes] = None,
+    auto_render: bool = True,
 ) -> Optional[dict]:
     """Promote a pending draft to v+1. Returns the new version entry
-    or None if no draft is pending."""
+    or None if no draft is pending.
+
+    When ``rendered`` is None and ``auto_render`` is True (default),
+    the renderer is invoked to produce the binary at commit time.
+    Render failures are logged but DO NOT block the commit — the
+    markdown still lands as v+1, the binary just won't exist.
+    Callers can re-render later via ``rerender_version``.
+    """
     pending = get_pending_draft(kb, slug)
     if not pending:
         return None
+    manifest = get_manifest(kb, slug)
+    if not manifest:
+        return None
+
+    if rendered is None and auto_render:
+        rendered = _safe_render(kb, slug, pending["markdown"], manifest)
+
     entry = commit_version(
         kb, slug, pending["markdown"], rendered,
         trigger=trigger,
@@ -419,6 +434,46 @@ def commit_pending_draft(
     )
     discard_pending_draft(kb, slug)
     return entry
+
+
+def rerender_version(kb: str, slug: str, version: int) -> Optional[bytes]:
+    """Re-run the renderer for an existing version (no new version row).
+
+    Useful when a render failed at commit time and we want to retry,
+    or when the default stylesheet changes and we want to refresh
+    older artifacts. Writes the new binary in-place."""
+    manifest = get_manifest(kb, slug)
+    if not manifest:
+        return None
+    md = get_markdown(kb, slug, version)
+    if md is None:
+        return None
+    rendered = _safe_render(kb, slug, md, manifest)
+    if rendered is None:
+        return None
+    doc_type = manifest.get("doc_type", "pdf")
+    _write_binary(kb, f"documents/{slug}/v{version}.{doc_type}", rendered)
+    return rendered
+
+
+def _safe_render(kb: str, slug: str, markdown_text: str, manifest: dict) -> Optional[bytes]:
+    """Render with full error capture. Returns None on failure so
+    callers can decide whether to commit-without-binary or abort.
+    """
+    doc_type = manifest.get("doc_type", "pdf")
+    if doc_type == "md-export":
+        return markdown_text.encode("utf-8")
+    if doc_type != "pdf":
+        # PPTX / DOCX renderers not implemented yet — caller still
+        # gets a markdown-only commit so version history advances.
+        logger.info("renderer for doc_type %s not implemented; skipping", doc_type)
+        return None
+    try:
+        from app.document_renderer import render_pdf
+        return render_pdf(markdown_text, title=manifest.get("title"))
+    except Exception as exc:
+        logger.warning("PDF render failed for %s/%s: %s", kb, slug, exc)
+        return None
 
 
 def add_pinned_fact(kb: str, slug: str, fact: str) -> bool:

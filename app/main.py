@@ -1181,6 +1181,154 @@ async def browse_scaffolds(request: Request, kb: str = "personal"):
 # resolve cleanly instead of 404'ing.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Documents — create, fetch, render, commit, export
+# ---------------------------------------------------------------------------
+
+@app.post("/api/documents/{kb_name}/create")
+async def api_document_create(request: Request, kb_name: str):
+    """Create a new document shell. Body: {title, brief, doc_type?,
+    autonomy_mode?, seed_articles?, pinned_facts?}. The drafting
+    agent fills v1 on the first chat turn."""
+    from app.documents import (
+        create_document, AUTONOMY_MODES, DOC_TYPES, DEFAULT_AUTONOMY,
+    )
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be JSON object")
+
+    title = (body.get("title") or "").strip()
+    brief = (body.get("brief") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required")
+    if len(brief) < 5:
+        raise HTTPException(status_code=400, detail="brief is required (min 5 chars)")
+
+    doc_type = body.get("doc_type", "pdf")
+    if doc_type not in DOC_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"doc_type must be one of {sorted(DOC_TYPES)}",
+        )
+    autonomy_mode = body.get("autonomy_mode", DEFAULT_AUTONOMY)
+    if autonomy_mode not in AUTONOMY_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"autonomy_mode must be one of {sorted(AUTONOMY_MODES)}",
+        )
+
+    try:
+        slug = create_document(
+            kb_name, title, brief,
+            doc_type=doc_type, autonomy_mode=autonomy_mode,
+            seed_articles=body.get("seed_articles"),
+            pinned_facts=body.get("pinned_facts"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"kb": kb_name, "slug": slug, "status": "created"}
+
+
+@app.get("/api/documents/{kb_name}")
+async def api_document_list(kb_name: str):
+    from app.documents import list_documents
+    return {"kb": kb_name, "documents": list_documents(kb_name)}
+
+
+@app.get("/api/documents/{kb_name}/{slug}")
+async def api_document_manifest(kb_name: str, slug: str):
+    from app.documents import get_manifest
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="document not found")
+    return manifest
+
+
+@app.get("/api/documents/{kb_name}/{slug}/markdown")
+async def api_document_markdown(kb_name: str, slug: str, v: int = 0):
+    """Return the markdown source at version v (0 = current)."""
+    from app.documents import get_markdown, get_manifest
+    if not get_manifest(kb_name, slug):
+        raise HTTPException(status_code=404, detail="document not found")
+    md = get_markdown(kb_name, slug, version=v or None)
+    if md is None:
+        raise HTTPException(status_code=404, detail=f"version not found: {v}")
+    return {"kb": kb_name, "slug": slug, "version": v, "markdown": md}
+
+
+@app.get("/api/documents/{kb_name}/{slug}/pending")
+async def api_document_pending(kb_name: str, slug: str):
+    """Return the pending agent draft (if any) so the chat UI can
+    diff it against current and offer ✓/✗."""
+    from app.documents import get_pending_draft, get_manifest
+    if not get_manifest(kb_name, slug):
+        raise HTTPException(status_code=404, detail="document not found")
+    pending = get_pending_draft(kb_name, slug)
+    return {"pending": pending}
+
+
+@app.post("/api/documents/{kb_name}/{slug}/commit")
+async def api_document_commit(kb_name: str, slug: str):
+    """Promote the pending agent draft to v+1 (renders PDF inline)."""
+    from app.documents import commit_pending_draft, get_manifest
+    if not get_manifest(kb_name, slug):
+        raise HTTPException(status_code=404, detail="document not found")
+    entry = commit_pending_draft(kb_name, slug)
+    if not entry:
+        raise HTTPException(status_code=409, detail="no pending draft to commit")
+    return {"kb": kb_name, "slug": slug, "committed_version": entry["v"]}
+
+
+@app.post("/api/documents/{kb_name}/{slug}/discard")
+async def api_document_discard(kb_name: str, slug: str):
+    from app.documents import discard_pending_draft
+    dropped = discard_pending_draft(kb_name, slug)
+    return {"kb": kb_name, "slug": slug, "discarded": dropped}
+
+
+@app.get("/api/documents/{kb_name}/{slug}/export")
+async def api_document_export(kb_name: str, slug: str, v: int = 0):
+    """Download the rendered PDF (or whatever doc_type) at version v."""
+    from app.documents import get_manifest, get_rendered, rerender_version
+    from starlette.responses import Response
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="document not found")
+    version = v or manifest.get("current_version", 0)
+    if version == 0:
+        raise HTTPException(status_code=404, detail="document has no committed versions yet")
+    rendered = get_rendered(kb_name, slug, version)
+    if rendered is None:
+        # Auto-recover: try a fresh render before giving up.
+        rendered = rerender_version(kb_name, slug, version)
+    if rendered is None:
+        raise HTTPException(status_code=500, detail="render unavailable")
+    doc_type = manifest.get("doc_type", "pdf")
+    mime = {
+        "pdf": "application/pdf",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "md-export": "text/markdown; charset=utf-8",
+    }.get(doc_type, "application/octet-stream")
+    safe_name = f"{slug}-v{version}.{doc_type if doc_type != 'md-export' else 'md'}"
+    return Response(
+        rendered, media_type=mime,
+        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+    )
+
+
+@app.delete("/api/documents/{kb_name}/{slug}")
+async def api_document_delete(kb_name: str, slug: str):
+    from app.documents import delete_document, get_manifest
+    if not get_manifest(kb_name, slug):
+        raise HTTPException(status_code=404, detail="document not found")
+    delete_document(kb_name, slug)
+    return {"status": "deleted", "kb": kb_name, "slug": slug}
+
+
 @app.get("/documents", response_class=HTMLResponse)
 async def browse_documents(request: Request, kb: str = "personal"):
     from app.documents import list_documents
