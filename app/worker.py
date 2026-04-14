@@ -172,31 +172,22 @@ async def agent_triage_kb_task(
     ``dry_run`` reports what would be queued without enqueueing.
     """
     import asyncio
-    from app.wiki import get_articles_cached
-    from app.quality import score_article_quality
+    from app.quality import score_all_articles
     from app.config import ARQ_QUEUE_NAME
 
-    articles = await get_articles_cached(kb_name)
+    # score_all_articles uses storage.iter_articles which streams via
+    # the backend's thread pool — much faster than N serial reads.
+    # One call scores the whole KB in seconds.
+    scored = score_all_articles(kb_name)
     if limit:
-        articles = articles[:limit]
+        scored = scored[:limit]
 
     below: list[dict] = []
     above: list[dict] = []
-    for art in articles:
-        slug = art.get("slug")
-        if not slug:
-            continue
-        try:
-            score_info = score_article_quality(kb_name, slug)
-            score = int(score_info.get("score", 0))
-        except Exception as exc:
-            logger.warning("triage: score failed for %s/%s: %s", kb_name, slug, exc)
-            # If we can't score it, queue it — better to agent-improve
-            # the unreadable article than silently skip.
-            below.append({"slug": slug, "score": -1})
-            continue
-        target = below if score < threshold else above
-        target.append({"slug": slug, "score": score, "title": score_info.get("title")})
+    for s in scored:
+        entry = {"slug": s["slug"], "score": int(s["score"]), "title": s.get("title")}
+        target = below if entry["score"] < threshold else above
+        target.append(entry)
 
     logger.info(
         "triage: kb=%s threshold=%d   below=%d  above=%d  dry_run=%s",
