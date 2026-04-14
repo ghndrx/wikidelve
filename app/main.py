@@ -1168,6 +1168,49 @@ async def browse_scaffolds(request: Request, kb: str = "personal"):
     )
 
 
+# ---------------------------------------------------------------------------
+# Documents — placeholder browse until chunk 4 of the Documents feature
+# lands. Storage layer (app/documents.py) is wired but the agent +
+# renderer + viewer aren't built yet. This stub lets the nav link
+# resolve cleanly instead of 404'ing.
+# ---------------------------------------------------------------------------
+
+@app.get("/documents", response_class=HTMLResponse)
+async def browse_documents(request: Request, kb: str = "personal"):
+    from app.documents import list_documents
+    items = list_documents(kb)
+    body = (
+        "<section class='wiki-article'>"
+        "<header class='article-header'>"
+        "<h1>Documents</h1>"
+        "<p style='color: var(--color-text-secondary);'>"
+        "Versioned rendered deliverables (PDF / PPTX / DOCX) produced by "
+        "the document drafting agent. Storage layer is in place; the "
+        "drafting agent, PDF renderer, and chat UI are still under "
+        "construction and will land in subsequent commits."
+        "</p>"
+        "</header>"
+        f"<p style='color: var(--color-text-muted); margin-top: 24px;'>"
+        f"Documents in <code>{kb}</code>: <strong>{len(items)}</strong>"
+        "</p>"
+        "</section>"
+    )
+    return render_inline(body, title="Documents")
+
+
+def render_inline(body_html: str, title: str = "WikiDelve") -> HTMLResponse:
+    """Tiny helper: render an inline body inside base.html via a one-shot
+    Jinja template literal. Used by stub pages that don't need their
+    own .html file yet — csp_nonce + other globals come from
+    jinja_env.globals (set up at module load).
+    """
+    tpl = jinja_env.from_string(
+        "{% extends 'base.html' %}{% block title %}" + title +
+        "{% endblock %}{% block content %}" + body_html + "{% endblock %}"
+    )
+    return HTMLResponse(tpl.render())
+
+
 @app.get("/api/graph/data")
 async def api_graph_data():
     """Return the full knowledge graph as nodes + edges for D3.js visualization."""
