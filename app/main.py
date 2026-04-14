@@ -344,7 +344,13 @@ async def security_headers_middleware(request: Request, call_next):
 
     for key, value in _STATIC_SECURITY_HEADERS.items():
         response.headers.setdefault(key, value)
-    response.headers["Content-Security-Policy"] = _build_csp(nonce)
+    # Sandbox routes (/sandbox/...) set their own MUCH stricter CSP
+    # (default-src 'self' data:; connect-src 'none'; ...) — overwriting
+    # it with the global site CSP would let scaffolded HTML phone home
+    # via connect-src 'self'. Skip the global CSP write for those
+    # routes; the route-handler-set value flows through unchanged.
+    if not request.url.path.startswith("/sandbox/"):
+        response.headers["Content-Security-Policy"] = _build_csp(nonce)
     # Drop anything that leaks infra details. uvicorn emits ``server:
     # uvicorn`` by default — replacing it with a generic token stops
     # fingerprinting without breaking HTTP/1.1 compliance.

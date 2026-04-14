@@ -27,12 +27,12 @@ class TestSafeRelPath:
     def test_nested_path_passes(self):
         assert scaffolds._safe_rel_path("css/styles.css") == "css/styles.css"
 
-    def test_strips_leading_slash(self):
-        # The function strips leading slashes via .strip('/'), then
-        # the absolute-path guard checks the original (unstripped)
-        # value — which means a leading slash is rejected before
-        # normalisation. That's the safer of the two readings.
-        with pytest.raises(ValueError, match="unsafe"):
+    def test_absolute_path_rejected(self):
+        # Bug fix: earlier the function stripped leading slashes which
+        # silently turned "/etc/passwd" into "etc/passwd". Now we
+        # reject absolute inputs up-front so the agent's intent isn't
+        # quietly rewritten.
+        with pytest.raises(ValueError, match="absolute"):
             scaffolds._safe_rel_path("/etc/passwd")
 
     def test_backslash_normalized(self):

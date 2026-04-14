@@ -97,17 +97,30 @@ def _now_iso_date() -> str:
 def _safe_rel_path(path: str) -> str:
     """Normalise a scaffold-relative path. Rejects escape attempts.
 
-    The agent writes these paths; if it tries ``../../etc/passwd`` or
-    a backslash-escaped sibling we refuse rather than writing outside
-    the scaffold's own tree.
+    The agent writes these paths; if it tries ``../../etc/passwd``,
+    a backslash-escaped sibling, or an absolute path we refuse rather
+    than writing outside the scaffold's own tree.
     """
     if not path:
         raise ValueError("empty file path")
-    norm = path.replace("\\", "/").strip("/")
-    if ".." in norm.split("/"):
+    raw = path.replace("\\", "/")
+    # Reject absolute paths BEFORE strip so "/etc/passwd" doesn't
+    # silently become "etc/passwd". The earlier version normalised
+    # away the leading slash, which let agents (or attackers) sneak
+    # in a path that *looked* relative after stripping.
+    if raw.startswith("/"):
+        raise ValueError(f"unsafe path (absolute): {path!r}")
+    if ":" in raw:
+        # Catches Windows drive letters and URI-ish escapes.
+        raise ValueError(f"unsafe path (drive/scheme): {path!r}")
+    # Collapse leading `./` segments so the agent can write either
+    # `./index.html` or `index.html` and we end up with the same key.
+    segments = [s for s in raw.split("/") if s and s != "."]
+    if any(s == ".." for s in segments):
         raise ValueError(f"path escape attempt: {path!r}")
-    if norm.startswith("/") or ":" in norm:
-        raise ValueError(f"unsafe path: {path!r}")
+    norm = "/".join(segments)
+    if not norm:
+        raise ValueError("empty file path")
     return norm
 
 
