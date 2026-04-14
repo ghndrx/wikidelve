@@ -253,6 +253,7 @@ async def run_agent_improve(
         f"stop and say so."
     )
 
+    import asyncio as _asyncio
     try:
         result = await agent.ainvoke(
             {"messages": [{"role": "user", "content": user_msg}]},
@@ -276,6 +277,29 @@ async def run_agent_improve(
             outcome="complete", word_count=len(content.split()),
         )
         return result
+    except (_asyncio.CancelledError, _asyncio.TimeoutError) as exc:
+        # arq cancels the task with CancelledError when job_timeout
+        # fires. That's BaseException, so the `except Exception`
+        # below doesn't see it — previously left the DB row stuck at
+        # status='agent_improving' forever. Catch it explicitly,
+        # mark the job as errored so the admin UI + retry paths can
+        # see the real state, THEN re-raise so arq still records the
+        # task as failed (don't silently swallow cancellation).
+        logger.warning(
+            "Agent improve cancelled/timed-out: job=%d slug=%s", job_id, slug,
+        )
+        try:
+            await db.update_job(
+                job_id, status="error",
+                error="Agent exceeded worker timeout (30min cap)",
+            )
+            await record_research_episode(
+                kb=kb, topic=f"improve:{slug}", job_id=job_id,
+                outcome="timeout", notes="worker job_timeout",
+            )
+        except Exception:
+            pass  # never block the cancellation path
+        raise
     except Exception as exc:
         logger.exception("Agent improve failed: job=%d slug=%s", job_id, slug)
         await db.update_job(job_id, status="error", error=str(exc))

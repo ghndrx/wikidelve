@@ -91,8 +91,10 @@ def _resolve_provider_model(
 
 # Transient status codes we should retry on. 408 = Request Timeout,
 # 425 = Too Early (rare but transient), 429 = Too Many Requests,
-# 500/502/503/504 = upstream/overload.
-_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+# 500/502/503/504 = upstream/overload, 529 = Cloudflare/CDN "site
+# overloaded" (seen in the wild from Minimax + scraped pages during
+# the 25-article pilot).
+_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504, 529})
 
 # Bedrock/boto3 error codes that are transient. Anything else (access
 # denied, validation, etc.) is a permanent failure — retrying wastes
