@@ -52,7 +52,7 @@ async def record_research_episode(
         episodes.append(episode)
         # Keep last 50 episodes per KB
         episodes = episodes[-50:]
-        await db.upsert_kb_settings(kb, {"agent_episodes": json.dumps(episodes)})
+        await db.upsert_kb_settings(kb, agent_episodes=json.dumps(episodes))
         logger.debug("Recorded research episode: job=%d outcome=%s", job_id, outcome)
     except Exception as exc:
         logger.warning("Failed to record episode: %s", exc)
@@ -151,9 +151,9 @@ async def record_source_reliability(
             reliability[domain]["bad"] += 1
 
         # Keep only domains with 3+ data points
-        await db.upsert_kb_settings("_global", {
-            "source_reliability": json.dumps(reliability)
-        })
+        await db.upsert_kb_settings(
+            "_global", source_reliability=json.dumps(reliability),
+        )
     except Exception as exc:
         logger.debug("Failed to record source reliability: %s", exc)
 

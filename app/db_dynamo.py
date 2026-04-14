@@ -1146,6 +1146,9 @@ async def update_claim_status(claim_id: int, status: str, confidence: float) -> 
 _KB_SETTINGS_FIELDS = (
     "synthesis_provider", "synthesis_model",
     "query_provider", "query_model", "persona",
+    # Agent memory — episodic log + per-domain source reliability.
+    # Stored as JSON text so we don't fracture the schema further.
+    "agent_episodes", "source_reliability",
 )
 
 

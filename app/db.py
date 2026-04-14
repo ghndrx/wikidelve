@@ -230,6 +230,8 @@ CREATE TABLE IF NOT EXISTS kb_settings (
     query_provider      TEXT,
     query_model         TEXT,
     persona             TEXT,
+    agent_episodes      TEXT,
+    source_reliability  TEXT,
     updated_at          TEXT NOT NULL
 );
 
@@ -328,6 +330,16 @@ async def init_db() -> None:
         if "source_params" not in columns:
             await db.execute("ALTER TABLE research_jobs ADD COLUMN source_params TEXT")
             logger.info("Migration: added source_params column to research_jobs")
+        # Migration: agent memory columns on kb_settings. Stores the
+        # episodic log and per-domain reliability map as JSON text.
+        cursor = await db.execute("PRAGMA table_info(kb_settings)")
+        kb_cols = {row["name"] for row in await cursor.fetchall()}
+        if "agent_episodes" not in kb_cols:
+            await db.execute("ALTER TABLE kb_settings ADD COLUMN agent_episodes TEXT")
+            logger.info("Migration: added agent_episodes column to kb_settings")
+        if "source_reliability" not in kb_cols:
+            await db.execute("ALTER TABLE kb_settings ADD COLUMN source_reliability TEXT")
+            logger.info("Migration: added source_reliability column to kb_settings")
         # Migration: add selected column to research_sources
         cursor = await db.execute("PRAGMA table_info(research_sources)")
         src_columns = {row["name"] for row in await cursor.fetchall()}
@@ -1368,6 +1380,8 @@ async def upsert_kb_settings(kb: str, **fields) -> dict:
     allowed = {
         "synthesis_provider", "synthesis_model",
         "query_provider", "query_model", "persona",
+        # Agent memory: episode log + source-reliability map (JSON text).
+        "agent_episodes", "source_reliability",
     }
     clean = {k: v for k, v in fields.items() if k in allowed}
     # Normalize empty string → NULL for clearing
