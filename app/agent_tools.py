@@ -234,6 +234,115 @@ async def write_scaffold_files(kb: str, manifest: dict, files: list) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Document chat tools
+# ---------------------------------------------------------------------------
+
+@tool
+async def get_document_version(kb: str, slug: str, version: int = 0) -> str:
+    """Read a document's markdown source at a given version.
+
+    version=0 means the current version. Returns the raw markdown."""
+    from app.documents import get_markdown, get_manifest
+    manifest = get_manifest(kb, slug)
+    if not manifest:
+        return json.dumps({"error": f"document not found: {kb}/{slug}"})
+    v = version or manifest.get("current_version", 0)
+    if v == 0:
+        return json.dumps({
+            "kb": kb, "slug": slug, "version": 0,
+            "markdown": "", "note": "no versions yet — this is the initial draft",
+        })
+    md = get_markdown(kb, slug, v)
+    if md is None:
+        return json.dumps({"error": f"version v{v} not found"})
+    return json.dumps({"kb": kb, "slug": slug, "version": v, "markdown": md})
+
+
+@tool
+async def list_document_versions(kb: str, slug: str) -> str:
+    """List all known versions of a document with their triggers."""
+    from app.documents import get_manifest
+    manifest = get_manifest(kb, slug)
+    if not manifest:
+        return json.dumps({"error": f"document not found: {kb}/{slug}"})
+    return json.dumps({
+        "kb": kb, "slug": slug,
+        "current_version": manifest.get("current_version", 0),
+        "versions": manifest.get("versions", []),
+    })
+
+
+@tool
+async def propose_document_version(
+    kb: str, slug: str, markdown: str, summary: str = "",
+) -> str:
+    """Stage a draft for the user to review (propose mode).
+
+    The draft is NOT committed — it sits in a pending slot until the
+    user clicks ✓ in the chat UI to promote it to v+1, or ✗ to
+    discard. Use this in 'propose' autonomy mode."""
+    from app.documents import write_pending_draft
+    try:
+        write_pending_draft(kb, slug, markdown, summary)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({
+        "kb": kb, "slug": slug, "status": "pending",
+        "summary": summary, "len_chars": len(markdown),
+        "note": "user must approve via /api/documents/.../commit",
+    })
+
+
+@tool
+async def save_document_version(
+    kb: str, slug: str, markdown: str, summary: str = "",
+) -> str:
+    """Commit a new version directly (auto mode only).
+
+    Use this only when the document's autonomy_mode is 'auto'. In
+    'propose' mode use propose_document_version instead. Always
+    bumps current_version by 1."""
+    from app.documents import commit_version
+    try:
+        # Renderer wiring lands in chunk 3; for now we commit the
+        # markdown without a binary so the version history is honest.
+        entry = commit_version(
+            kb, slug, markdown, None,
+            trigger="agent direct save",
+            agent_notes=summary,
+        )
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({"kb": kb, "slug": slug, "version": entry["v"]})
+
+
+@tool
+async def add_pinned_fact(kb: str, slug: str, fact: str) -> str:
+    """Record a fact the user has asserted as ground-truth.
+
+    Future agent turns will see this in the document's manifest and
+    must NEVER contradict it, even when sources suggest otherwise.
+    Use when the user pushes back with 'no, our X is actually Y'."""
+    from app.documents import add_pinned_fact as _pin
+    ok = _pin(kb, slug, fact)
+    return json.dumps({
+        "kb": kb, "slug": slug,
+        "pinned": ok, "fact": fact[:200],
+    })
+
+
+@tool
+async def ask_user(question: str) -> str:
+    """Ask the user a clarifying question instead of guessing.
+
+    Returns immediately — the user's reply comes in the NEXT turn.
+    Use when intent is ambiguous (which section? which version to
+    revert to? which audience?). Don't overuse — only when guessing
+    has real downside."""
+    return json.dumps({"asked": question[:1000], "awaiting_user_reply": True})
+
+
+# ---------------------------------------------------------------------------
 # All tools exported
 # ---------------------------------------------------------------------------
 

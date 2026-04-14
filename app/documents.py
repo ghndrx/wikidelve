@@ -359,6 +359,89 @@ def append_chat_turn(
     })
 
 
+def get_pending_draft(kb: str, slug: str) -> Optional[dict]:
+    """Read the draft proposed by the last agent turn (propose mode).
+
+    Returns ``{markdown, summary, proposed_at}`` or None if no draft
+    is pending. The chat UI shows this as a diff against the current
+    version with ✓/✗ buttons before promoting it to v+1.
+    """
+    raw = storage.read_text(kb, f"documents/{slug}/_pending.json")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def write_pending_draft(
+    kb: str, slug: str, markdown: str, summary: str,
+) -> None:
+    """Stage a draft for the user to ✓ or ✗. Used by propose-mode."""
+    if not isinstance(markdown, str):
+        raise ValueError("markdown must be str")
+    if len(markdown.encode("utf-8")) > MAX_MARKDOWN_BYTES:
+        raise ValueError(f"markdown too large (max {MAX_MARKDOWN_BYTES} bytes)")
+    payload = {
+        "markdown": markdown,
+        "summary": (summary or "")[:2000],
+        "proposed_at": _now_iso(),
+    }
+    storage.write_text(
+        kb, f"documents/{slug}/_pending.json",
+        json.dumps(payload, indent=2),
+    )
+
+
+def discard_pending_draft(kb: str, slug: str) -> bool:
+    """Drop the pending draft. Returns True if one was actually
+    removed, False if nothing was staged."""
+    if not get_pending_draft(kb, slug):
+        return False
+    storage.delete(kb, f"documents/{slug}/_pending.json")
+    return True
+
+
+def commit_pending_draft(
+    kb: str, slug: str, *, trigger: str = "user committed pending draft",
+    rendered: Optional[bytes] = None,
+) -> Optional[dict]:
+    """Promote a pending draft to v+1. Returns the new version entry
+    or None if no draft is pending."""
+    pending = get_pending_draft(kb, slug)
+    if not pending:
+        return None
+    entry = commit_version(
+        kb, slug, pending["markdown"], rendered,
+        trigger=trigger,
+        agent_notes=pending.get("summary"),
+    )
+    discard_pending_draft(kb, slug)
+    return entry
+
+
+def add_pinned_fact(kb: str, slug: str, fact: str) -> bool:
+    """Append to manifest.pinned_facts so future agent turns respect it."""
+    manifest = get_manifest(kb, slug)
+    if not manifest:
+        return False
+    fact = (fact or "").strip()[:500]
+    if not fact:
+        return False
+    pinned = list(manifest.get("pinned_facts") or [])
+    if fact in pinned:
+        return True
+    pinned.append(fact)
+    manifest["pinned_facts"] = pinned
+    manifest["updated"] = _now_date()
+    storage.write_text(
+        kb, f"documents/{slug}/manifest.json",
+        json.dumps(manifest, indent=2, sort_keys=True),
+    )
+    return True
+
+
 def delete_document(kb: str, slug: str) -> None:
     manifest = get_manifest(kb, slug)
     if manifest:
