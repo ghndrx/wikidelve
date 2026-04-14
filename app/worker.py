@@ -886,7 +886,15 @@ class WorkerSettings:
     redis_settings = RedisSettings(host=REDIS_HOST, port=REDIS_PORT)
     queue_name = ARQ_QUEUE_NAME
 
-    # Allow long-running research jobs (up to 10 minutes)
-    job_timeout = 600
+    # Agent-improve loops on Minimax can easily exceed 10min on longer
+    # articles. The pilot hit the old 600s cap, arq auto-cancelled,
+    # then auto-retried — producing a retry loop that burned every
+    # worker slot. Bump to 30min for the agent case; individual
+    # enqueue sites can pass _timeout= to shorten when appropriate.
+    job_timeout = 1800
+    # Failed agent runs should NOT silently re-enqueue — a 30-minute
+    # timeout means a retry costs another 30 minutes. Surface the
+    # failure once; user can re-queue manually if they want.
+    max_tries = 1
     max_jobs = 15
     poll_delay = 0.3
