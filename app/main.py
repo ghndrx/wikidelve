@@ -1329,27 +1329,70 @@ async def api_document_delete(kb_name: str, slug: str):
     return {"status": "deleted", "kb": kb_name, "slug": slug}
 
 
+@app.get("/api/documents/{kb_name}/{slug}/history")
+async def api_document_history(kb_name: str, slug: str, limit: int = 50):
+    """Return the chat-turn + version history log for a document."""
+    from app.documents import get_history, get_manifest
+    if not get_manifest(kb_name, slug):
+        raise HTTPException(status_code=404, detail="document not found")
+    return {
+        "kb": kb_name, "slug": slug,
+        "events": get_history(kb_name, slug, limit=limit),
+    }
+
+
+@app.post("/api/documents/{kb_name}/{slug}/chat")
+async def api_document_chat(request: Request, kb_name: str, slug: str):
+    """Send a user message to the document drafting agent.
+
+    Body: {"message": "..."}.  Runs one agent turn synchronously
+    (typical Minimax round-trip ~10-30s — fine for an interactive
+    chat feel).  Returns {response, pending, version_after}.
+    """
+    from app.documents import get_manifest
+    from app.agent import run_doc_chat_turn
+    if not get_manifest(kb_name, slug):
+        raise HTTPException(status_code=404, detail="document not found")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be JSON object")
+    message = (body.get("message") or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    result = await run_doc_chat_turn(kb_name, slug, message)
+    if "error" in result:
+        # Don't surface as 500 — the chat UI can render this as an
+        # in-conversation agent error message.
+        return {"error": result["error"], "ok": False}
+    return {**result, "ok": True}
+
+
+@app.get("/documents/{kb_name}/{slug}", response_class=HTMLResponse)
+async def view_document(request: Request, kb_name: str, slug: str):
+    from app.documents import get_manifest, get_history
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="document not found")
+    history = get_history(kb_name, slug, limit=50)
+    return render(
+        "document_view.html",
+        kb=kb_name, slug=slug,
+        manifest=manifest, history=history,
+    )
+
+
 @app.get("/documents", response_class=HTMLResponse)
 async def browse_documents(request: Request, kb: str = "personal"):
-    from app.documents import list_documents
+    from app.documents import list_documents, DOC_TYPES
     items = list_documents(kb)
-    body = (
-        "<section class='wiki-article'>"
-        "<header class='article-header'>"
-        "<h1>Documents</h1>"
-        "<p style='color: var(--color-text-secondary);'>"
-        "Versioned rendered deliverables (PDF / PPTX / DOCX) produced by "
-        "the document drafting agent. Storage layer is in place; the "
-        "drafting agent, PDF renderer, and chat UI are still under "
-        "construction and will land in subsequent commits."
-        "</p>"
-        "</header>"
-        f"<p style='color: var(--color-text-muted); margin-top: 24px;'>"
-        f"Documents in <code>{kb}</code>: <strong>{len(items)}</strong>"
-        "</p>"
-        "</section>"
+    return render(
+        "documents_browse.html",
+        kb=kb, items=items, doc_types=sorted(DOC_TYPES),
     )
-    return render_inline(body, title="Documents")
 
 
 def render_inline(body_html: str, title: str = "WikiDelve") -> HTMLResponse:

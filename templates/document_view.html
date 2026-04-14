@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+
+{% block title %}{{ manifest.title }} - Document{% endblock %}
+
+{% block content %}
+<style nonce="{{ csp_nonce() }}">
+.doc-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: 16px;
+    height: calc(100vh - 140px);
+    min-height: 600px;
+}
+@media (max-width: 900px) {
+    .doc-layout { grid-template-columns: 1fr; height: auto; }
+}
+.doc-pane {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-surface);
+    overflow: hidden;
+    min-height: 0;
+}
+.doc-pane-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--color-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    background: var(--color-surface-alt);
+    flex: 0 0 auto;
+}
+.doc-pane-body {
+    flex: 1 1 auto;
+    overflow: auto;
+    min-height: 0;
+}
+.chat-bubble {
+    margin: 8px 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+.chat-bubble.user { background: var(--color-surface-alt); margin-left: 32px; }
+.chat-bubble.agent { background: rgba(0,128,255,0.08); margin-right: 32px; }
+.chat-bubble.error { background: rgba(255,0,0,0.08); }
+.chat-bubble.pending {
+    background: rgba(255,200,0,0.15);
+    border: 1px solid rgba(255,200,0,0.5);
+}
+.chat-bubble-meta {
+    font-size: 10px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+}
+.chat-input-wrap {
+    border-top: 1px solid var(--color-border);
+    padding: 10px;
+    flex: 0 0 auto;
+    background: var(--color-surface);
+}
+.chat-input {
+    width: 100%;
+    min-height: 44px;
+    max-height: 200px;
+    padding: 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface);
+    font-family: inherit;
+    font-size: 14px;
+    resize: vertical;
+}
+.version-pills {
+    padding: 6px 12px;
+    border-top: 1px solid var(--color-border);
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+    background: var(--color-surface);
+}
+.version-pill {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--color-border);
+    cursor: pointer;
+}
+.version-pill.current {
+    background: var(--color-accent, #06c);
+    color: white;
+    border-color: var(--color-accent, #06c);
+}
+.diff-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+.diff-actions button {
+    font-size: 12px;
+    padding: 4px 10px;
+}
+</style>
+
+<header style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">
+    <div>
+        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted);">
+            <a href="/documents" style="color: inherit;">Documents</a> · {{ manifest.doc_type }} · {{ manifest.autonomy_mode }} mode
+        </div>
+        <h1 style="margin: 4px 0 0 0;">{{ manifest.title }}</h1>
+        <p style="color: var(--color-text-secondary); margin: 4px 0 0 0; font-size: 14px;">{{ manifest.brief }}</p>
+    </div>
+    <div style="font-size: 13px; color: var(--color-text-muted); white-space: nowrap;">
+        v{{ manifest.current_version }} · updated {{ manifest.updated }}
+    </div>
+</header>
+
+<div class="doc-layout">
+    <!-- Left: Document preview -->
+    <div class="doc-pane">
+        <div class="doc-pane-header">
+            <span><strong>Preview</strong></span>
+            <span>
+                {% if manifest.current_version > 0 %}
+                <a href="/api/documents/{{ kb }}/{{ slug }}/export" target="_blank" rel="noopener" style="font-size: 12px;">Open / download →</a>
+                {% endif %}
+            </span>
+        </div>
+        <div class="doc-pane-body" id="doc-preview">
+            {% if manifest.current_version == 0 %}
+            <div style="padding: 32px; text-align: center; color: var(--color-text-muted);">
+                <p>No version committed yet.</p>
+                <p style="font-size: 13px;">Send a chat message →<br/>The agent will draft v1.</p>
+            </div>
+            {% elif manifest.doc_type == 'pdf' %}
+            <iframe src="/api/documents/{{ kb }}/{{ slug }}/export" style="width: 100%; height: 100%; border: 0;" title="PDF preview"></iframe>
+            {% else %}
+            <pre id="md-preview" style="margin: 0; padding: 16px; white-space: pre-wrap; font-family: var(--font-mono); font-size: 13px;">Loading...</pre>
+            {% endif %}
+        </div>
+        <div class="version-pills" id="version-pills">
+            {% for entry in manifest.versions %}
+            <span class="version-pill{% if entry.v == manifest.current_version %} current{% endif %}" data-v="{{ entry.v }}" title="{{ entry.trigger }}">v{{ entry.v }}</span>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Right: Chat -->
+    <div class="doc-pane">
+        <div class="doc-pane-header">
+            <span><strong>Chat</strong> with the drafting agent</span>
+            <span style="font-size: 11px; color: var(--color-text-muted);">{{ manifest.autonomy_mode }} mode</span>
+        </div>
+        <div class="doc-pane-body" id="chat-scroll">
+            {% for evt in history if evt.type == 'turn' %}
+            <div class="chat-bubble {{ evt.role }}">
+                <div class="chat-bubble-meta">{{ evt.role }} · {{ evt.timestamp[:19] if evt.timestamp else '' }}</div>
+                {{ evt.content }}
+            </div>
+            {% else %}
+            <div style="padding: 24px; text-align: center; color: var(--color-text-muted); font-size: 13px;">
+                Start the conversation. Try: "Draft v1 from the brief" or
+                "Pull from kb article X and write a one-pager."
+            </div>
+            {% endfor %}
+        </div>
+        <div class="chat-input-wrap">
+            <textarea class="chat-input" id="chat-input" placeholder="Type a message... (Cmd+Enter to send)"></textarea>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+                <span id="chat-status" style="font-size: 11px; color: var(--color-text-muted);"></span>
+                <button id="chat-send" class="wiki-btn" style="font-size: 13px;">Send</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    var kb = {{ kb|tojson }};
+    var slug = {{ slug|tojson }};
+    var input = document.getElementById('chat-input');
+    var sendBtn = document.getElementById('chat-send');
+    var statusEl = document.getElementById('chat-status');
+    var scroll = document.getElementById('chat-scroll');
+
+    function scrollToBottom() {
+        scroll.scrollTop = scroll.scrollHeight;
+    }
+    scrollToBottom();
+
+    function nowStamp() {
+        return new Date().toISOString().slice(0, 19);
+    }
+
+    // Build a chat bubble node entirely via createElement + textContent
+    // — no innerHTML so user-controlled content can never inject HTML
+    // through the Documents chat surface.
+    function makeBubble(role, content, opts) {
+        opts = opts || {};
+        var div = document.createElement('div');
+        div.className = 'chat-bubble ' + role;
+        var meta = document.createElement('div');
+        meta.className = 'chat-bubble-meta';
+        meta.textContent = role + ' · ' + nowStamp();
+        div.appendChild(meta);
+        var body = document.createElement('div');
+        body.textContent = content;
+        div.appendChild(body);
+        if (opts.pending) {
+            var actions = document.createElement('div');
+            actions.className = 'diff-actions';
+            var commit = document.createElement('button');
+            commit.className = 'wiki-btn commit-btn';
+            commit.textContent = '✓ Commit pending';
+            var discard = document.createElement('button');
+            discard.className = 'wiki-btn discard-btn';
+            discard.textContent = '✗ Discard';
+            actions.appendChild(commit);
+            actions.appendChild(discard);
+            div.appendChild(actions);
+        }
+        return div;
+    }
+
+    function appendBubble(role, content, opts) {
+        // Drop the empty-state hint if it's still showing.
+        var hint = scroll.querySelector('div[style*="text-align: center"]');
+        if (hint) hint.remove();
+        var div = makeBubble(role, content, opts);
+        scroll.appendChild(div);
+        scrollToBottom();
+        return div;
+    }
+
+    // Replace a button's parent's contents with a static status
+    // message — built with createElement so even the version number
+    // (server-controlled but conceivably tainted) goes through
+    // textContent, not innerHTML.
+    function replaceWithStatus(parent, text) {
+        while (parent.firstChild) parent.removeChild(parent.firstChild);
+        var span = document.createElement('span');
+        span.style.fontSize = '12px';
+        span.style.color = 'var(--color-text-muted)';
+        span.textContent = text;
+        parent.appendChild(span);
+    }
+
+    async function sendTurn() {
+        var msg = input.value.trim();
+        if (!msg) return;
+        appendBubble('user', msg);
+        input.value = '';
+        sendBtn.disabled = true;
+        statusEl.textContent = 'agent thinking...';
+        try {
+            var r = await fetch(
+                '/api/documents/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/chat',
+                {
+                    method: 'POST',
+                    headers: {'content-type': 'application/json'},
+                    body: JSON.stringify({message: msg}),
+                }
+            );
+            var data = await r.json();
+            if (data.error) {
+                appendBubble('error', String(data.error));
+            } else {
+                appendBubble('agent', String(data.response || ''), {pending: !!data.pending});
+                if (data.version_after && data.version_after > 0) {
+                    statusEl.textContent = 'v' + Number(data.version_after) + ' is current';
+                    var iframe = document.querySelector('#doc-preview iframe');
+                    if (iframe) iframe.src = iframe.src.split('?')[0] + '?ts=' + Date.now();
+                }
+            }
+        } catch (e) {
+            appendBubble('error', e.message);
+        } finally {
+            sendBtn.disabled = false;
+            statusEl.textContent = '';
+        }
+    }
+
+    sendBtn.addEventListener('click', sendTurn);
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            sendTurn();
+        }
+    });
+
+    // Delegate ✓ / ✗ buttons in pending bubbles.
+    scroll.addEventListener('click', async function(e) {
+        var commitBtn = e.target.closest('.commit-btn');
+        var discardBtn = e.target.closest('.discard-btn');
+        if (!commitBtn && !discardBtn) return;
+        var btn = commitBtn || discardBtn;
+        var url = '/api/documents/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) +
+            (commitBtn ? '/commit' : '/discard');
+        btn.disabled = true;
+        btn.textContent = btn.textContent + '...';
+        try {
+            var r = await fetch(url, {method: 'POST'});
+            var data = await r.json();
+            if (commitBtn) {
+                replaceWithStatus(btn.parentElement, 'Committed v' + Number(data.committed_version || 0));
+                setTimeout(function() { window.location.reload(); }, 500);
+            } else {
+                replaceWithStatus(btn.parentElement, 'Discarded');
+            }
+        } catch (err) {
+            btn.disabled = false;
+            btn.textContent = btn.textContent.replace('...', '');
+        }
+    });
+})();
+</script>
+{% endblock %}

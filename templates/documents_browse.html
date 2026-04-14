@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Documents{% endblock %}
+
+{% block content %}
+<section class="wiki-article">
+    <header class="article-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 24px;">
+        <div>
+            <h1>Documents</h1>
+            <p style="color: var(--color-text-secondary); max-width: 640px;">
+                Versioned rendered deliverables (PDF / PPTX / Markdown) you
+                iterate via chat. Each document has a brief, optional seed
+                articles from your KB, and an autonomy mode for the
+                drafting agent.
+            </p>
+        </div>
+        <button id="new-doc-btn" class="wiki-btn" style="white-space: nowrap;">+ New document</button>
+    </header>
+
+    <div id="doc-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 24px;">
+        {% for d in items %}
+        <a href="/documents/{{ kb }}/{{ d.slug }}" class="doc-card"
+           style="display: block; padding: 16px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); text-decoration: none; color: inherit;">
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); margin-bottom: 6px;">
+                {{ d.doc_type }} · {{ d.autonomy_mode }} · v{{ d.current_version }}
+            </div>
+            <div style="font-weight: 600; margin-bottom: 4px;">{{ d.title }}</div>
+            <div style="font-size: 12px; color: var(--color-text-muted);">
+                updated {{ d.updated }}
+            </div>
+        </a>
+        {% else %}
+        <div style="grid-column: 1 / -1; padding: 32px; text-align: center; color: var(--color-text-muted); border: 1px dashed var(--color-border); border-radius: 8px;">
+            <p>No documents yet for KB <code>{{ kb }}</code>.</p>
+            <p style="font-size: 13px; margin-top: 8px;">Click <strong>+ New document</strong> above to create one.</p>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- New document modal -->
+<div id="new-doc-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center;">
+    <div style="background: var(--color-surface); border-radius: 8px; padding: 24px; width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto;">
+        <h2 style="margin: 0 0 16px 0;">New document</h2>
+        <form id="new-doc-form">
+            <label style="display: block; margin-bottom: 12px;">
+                <span style="display: block; font-size: 12px; color: var(--color-text-muted); margin-bottom: 4px;">Title</span>
+                <input name="title" required style="width: 100%; padding: 8px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface);" />
+            </label>
+            <label style="display: block; margin-bottom: 12px;">
+                <span style="display: block; font-size: 12px; color: var(--color-text-muted); margin-bottom: 4px;">Brief — what's the deliverable?</span>
+                <textarea name="brief" rows="3" required style="width: 100%; padding: 8px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); font-family: inherit; resize: vertical;"></textarea>
+            </label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                <label>
+                    <span style="display: block; font-size: 12px; color: var(--color-text-muted); margin-bottom: 4px;">Type</span>
+                    <select name="doc_type" style="width: 100%; padding: 8px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface);">
+                        {% for t in doc_types %}
+                        <option value="{{ t }}"{% if t == 'pdf' %} selected{% endif %}>{{ t }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>
+                    <span style="display: block; font-size: 12px; color: var(--color-text-muted); margin-bottom: 4px;">Autonomy</span>
+                    <select name="autonomy_mode" style="width: 100%; padding: 8px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface);">
+                        <option value="propose" selected>propose (review each ✓)</option>
+                        <option value="auto">auto (commit immediately)</option>
+                        <option value="plan-first">plan-first (announce before drafting)</option>
+                    </select>
+                </label>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+                <button type="button" id="cancel-new-doc" class="wiki-btn">Cancel</button>
+                <button type="submit" class="wiki-btn" style="background: var(--color-accent); color: white;">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    var kb = {{ kb|tojson }};
+    var modal = document.getElementById('new-doc-modal');
+    document.getElementById('new-doc-btn').addEventListener('click', function() {
+        modal.style.display = 'flex';
+    });
+    document.getElementById('cancel-new-doc').addEventListener('click', function() {
+        modal.style.display = 'none';
+    });
+    modal.addEventListener('click', function(e) {
+        if (e.target === modal) modal.style.display = 'none';
+    });
+    document.getElementById('new-doc-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var fd = new FormData(e.target);
+        var body = {};
+        fd.forEach(function(v, k) { body[k] = v; });
+        var resp = await fetch('/api/documents/' + encodeURIComponent(kb) + '/create', {
+            method: 'POST',
+            headers: {'content-type': 'application/json'},
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) {
+            var err = await resp.json().catch(function() { return {}; });
+            alert('Create failed: ' + (err.detail || resp.status));
+            return;
+        }
+        var data = await resp.json();
+        window.location.href = '/documents/' + encodeURIComponent(kb) + '/' + encodeURIComponent(data.slug);
+    });
+})();
+</script>
+{% endblock %}
