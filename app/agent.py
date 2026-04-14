@@ -239,6 +239,11 @@ async def run_agent_improve(
         )
         return {"error": f"Article not found: {kb}/{slug}"}
 
+    # Remember the pre-run state so we can distinguish 'agent crashed
+    # without writing' from 'agent wrote then crashed later'. The
+    # second case is a partial success: the wiki IS improved, so
+    # marking the job hard-errored makes the error counter lie.
+    pre_updated = (article.get("updated") or "").strip()
     title = article.get("title") or slug.replace("-", " ").title()
     agent = await create_improve_agent(kb=kb, slug=slug)
 
@@ -302,6 +307,29 @@ async def run_agent_improve(
         raise
     except Exception as exc:
         logger.exception("Agent improve failed: job=%d slug=%s", job_id, slug)
+        # Partial-success check: if the wiki file was actually touched
+        # before the crash, treat it as complete-with-warning rather
+        # than a hard error. The user's article IS improved; only the
+        # post-write bookkeeping (fact-check, embed, etc.) failed.
+        post = get_article(kb, slug)
+        post_updated = (post.get("updated") if post else "") or ""
+        wiki_was_touched = bool(post_updated) and post_updated != pre_updated
+        if wiki_was_touched:
+            logger.warning(
+                "Agent improve partial success: job=%d slug=%s — wiki "
+                "updated %s → %s but post-write step failed: %s",
+                job_id, slug, pre_updated, post_updated, exc,
+            )
+            await db.update_job(
+                job_id, status="complete",
+                error=f"Partial: wiki written but post-step failed: {str(exc)[:150]}",
+                wiki_slug=slug, wiki_kb=kb, added_to_wiki=1,
+            )
+            await record_research_episode(
+                kb=kb, topic=f"improve:{slug}", job_id=job_id,
+                outcome="partial", notes=str(exc)[:200],
+            )
+            return {"status": "partial", "slug": slug, "error": str(exc)}
         await db.update_job(job_id, status="error", error=str(exc))
         await record_research_episode(
             kb=kb, topic=f"improve:{slug}", job_id=job_id,

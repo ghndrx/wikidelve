@@ -872,6 +872,59 @@ async def api_agent_improve(request: Request, kb_name: str, slug: str):
     }
 
 
+@app.get("/api/kb/{kb_name}/agent-resync/status")
+async def api_agent_resync_status(kb_name: str):
+    """Live progress snapshot for the in-flight agent-improve batch.
+
+    Scans recent jobs with topic prefix 'improve:{kb}/' and reports
+    counts. ETA is derived from completion rate over the window.
+    """
+    jobs = await db.get_jobs(limit=5000, compact=True)
+    prefix = f"improve:{kb_name}/"
+    improve = [j for j in jobs if (j.get("topic") or "").startswith(prefix)]
+    total = len(improve)
+    complete = sum(1 for j in improve if j.get("status") == "complete")
+    errored = sum(1 for j in improve if j.get("status") == "error")
+    queued = sum(1 for j in improve if j.get("status") == "queued")
+    running = sum(
+        1 for j in improve
+        if j.get("status") in ("agent_improving", "writing")
+    )
+
+    # Rough ETA: completion rate over the finished set.
+    import datetime as _dt
+    completion_times = [
+        j.get("completed_at") for j in improve
+        if j.get("status") == "complete" and j.get("completed_at")
+    ]
+    eta_seconds = None
+    rate_per_hour = None
+    if len(completion_times) >= 5:
+        try:
+            times = sorted(_dt.datetime.fromisoformat(t.replace("Z", "+00:00"))
+                           for t in completion_times if t)
+            span = (times[-1] - times[0]).total_seconds()
+            if span > 0:
+                rate = len(times) / span  # jobs per second
+                rate_per_hour = round(rate * 3600, 1)
+                remaining = queued + running
+                if rate > 0:
+                    eta_seconds = int(remaining / rate)
+        except Exception:
+            pass
+
+    return {
+        "kb": kb_name,
+        "batch": {
+            "total": total, "complete": complete,
+            "errored": errored, "queued": queued, "running": running,
+            "remaining": queued + running,
+            "rate_per_hour": rate_per_hour,
+            "eta_seconds": eta_seconds,
+        },
+    }
+
+
 @app.post("/api/kb/{kb_name}/agent-triage")
 async def api_agent_triage(request: Request, kb_name: str):
     """Score the KB and agent-improve only articles below threshold.

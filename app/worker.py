@@ -616,9 +616,28 @@ async def auto_discovery_refill_task(ctx: dict) -> dict:
 async def auto_discovery_enqueue_task(ctx: dict) -> dict:
     """Cron task: drain candidate queues into research_task jobs.
 
-    Runs every hour. Respects per-KB Serper budgets and max-per-hour caps.
+    Runs every hour. Respects per-KB Serper budgets and max-per-hour
+    caps, and yields when a big agent-improve batch is in flight so
+    the new research jobs don't fight for the concurrency cap.
     """
     from app.auto_discovery import enqueue_next_candidates_all
+    # Resync backpressure: if we already have a wall of queued
+    # improve jobs, the hourly research cron would pile on top and
+    # compete for the 24 concurrency slots for hours. Yield this
+    # tick — next hour's run will catch up once the batch drains.
+    try:
+        stats = await db.get_job_stats()
+        if (stats.get("queued") or 0) >= 100:
+            logger.info(
+                "auto_discovery enqueue: skipped — %d queued jobs in flight",
+                stats["queued"],
+            )
+            return {"status": "skipped", "reason": "resync batch in flight",
+                    "queued": stats["queued"]}
+    except Exception:
+        # Stats lookup should never block the cron — fall through
+        # and run normally if db is misbehaving.
+        pass
     try:
         return await enqueue_next_candidates_all(ctx["redis"])
     except Exception as exc:
