@@ -1915,6 +1915,8 @@ async def api_grokmaxx_status():
             "total": job_stats.get("total", 0),
             "complete": job_stats.get("complete", 0),
             "active": job_stats.get("active", 0),
+            "queued": job_stats.get("queued", 0),
+            "awaiting_review": job_stats.get("awaiting_review", 0),
             "errors": job_stats.get("errors", 0),
             "cancelled": job_stats.get("cancelled", 0),
             "words_generated": job_stats.get("total_words", 0),

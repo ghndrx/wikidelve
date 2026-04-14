@@ -268,16 +268,23 @@ async def get_job_stats() -> dict:
     complete = sum(1 for j in jobs if j.get("status") == "complete")
     errors = sum(1 for j in jobs if j.get("status") == "error")
     cancelled = sum(1 for j in jobs if j.get("status") == "cancelled")
+    queued = sum(1 for j in jobs if j.get("status") == "queued")
+    awaiting_review = sum(1 for j in jobs if j.get("status") == "awaiting_review")
+    # "active" now means "actually running right now" — queued jobs
+    # used to get lumped here, which made the admin UI inflate the
+    # running count during big batch enqueues.
     active = sum(1 for j in jobs if j.get("status") in (
-        "queued", "searching", "searching_round_1", "searching_round_2",
+        "searching", "searching_round_1", "searching_round_2",
         "searching_round_3", "synthesizing", "reading_pages",
         "downloading_docs", "browser_reading",
+        "agent_researching", "agent_improving", "writing",
     ))
     total_words = sum(j.get("word_count", 0) for j in jobs)
     added = sum(1 for j in jobs if j.get("added_to_wiki"))
     return {
         "total": total, "complete": complete, "errors": errors,
         "active": active, "cancelled": cancelled,
+        "queued": queued, "awaiting_review": awaiting_review,
         "total_words": total_words, "added_to_wiki": added,
     }
 

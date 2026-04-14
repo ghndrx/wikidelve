@@ -1211,7 +1211,10 @@ document.addEventListener('submit', function(event) {
     var ACTIVE_STATUSES = [
         'searching', 'searching_round_1', 'searching_round_2',
         'searching_round_3', 'downloading_docs', 'reading_pages',
-        'synthesizing', 'writing'
+        'synthesizing', 'writing',
+        // Agent loop statuses — without these, agent-improve jobs
+        // show as "other" and don't count toward the Active summary.
+        'agent_researching', 'agent_improving',
     ];
 
     function bucketFor(status) {
@@ -1430,20 +1433,30 @@ document.addEventListener('submit', function(event) {
 
     function updateSummary() {
         var all = mergedJobs();
-        var buckets = {queued: 0, active: 0, awaiting_review: 0, complete: 0, error: 0, cancelled: 0};
-        all.forEach(function(j) {
-            var b = bucketFor(j.status);
-            if (b in buckets) buckets[b]++;
-        });
-        document.getElementById('jobs-total').textContent = all.length;
-        document.getElementById('jobs-queued').textContent = buckets.queued;
-        document.getElementById('jobs-active').textContent = buckets.active;
-        document.getElementById('jobs-review').textContent = buckets.awaiting_review;
-        document.getElementById('jobs-complete').textContent = buckets.complete;
-        document.getElementById('jobs-error').textContent = buckets.error;
-
         loadedCount.textContent = 'Loaded ' + all.length + (olderExhausted ? ' (all)' : '');
         loadMoreBtn.style.display = olderExhausted ? 'none' : 'inline-block';
+        // Cards are refreshed from the KB-wide stats endpoint in
+        // refreshKbStats() so they don't lie when the visible page
+        // (capped at ~100) isn't representative of the queue. Big
+        // resyncs used to show "Complete: 0" because the 100 most
+        // recent were all queued — totally misleading.
+    }
+
+    async function refreshKbStats() {
+        try {
+            var r = await fetch('/api/status', {cache: 'no-store'});
+            if (!r.ok) return;
+            var data = await r.json();
+            var j = (data && data.jobs) ? data.jobs : {};
+            document.getElementById('jobs-total').textContent = j.total || 0;
+            document.getElementById('jobs-queued').textContent = j.queued || 0;
+            document.getElementById('jobs-active').textContent = j.active || 0;
+            document.getElementById('jobs-review').textContent = j.awaiting_review || 0;
+            document.getElementById('jobs-complete').textContent = j.complete || 0;
+            document.getElementById('jobs-error').textContent = j.errors || 0;
+        } catch (e) {
+            // Non-fatal — cards just stay at last known values.
+        }
     }
 
     async function fetchJobs() {
@@ -1459,6 +1472,9 @@ document.addEventListener('submit', function(event) {
             latestJobs = await r.json();
             updateSummary();
             render();
+            // Fire-and-forget KB-wide count refresh so the cards stay
+            // honest even when the visible page is 100% queued.
+            refreshKbStats();
             lastUpdated.textContent = 'Updated ' + new Date().toLocaleTimeString();
         } catch (e) {
             lastUpdated.textContent = 'Error: ' + e.message;

@@ -510,7 +510,9 @@ async def get_job_stats() -> dict:
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) as complete,
                 SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors,
-                SUM(CASE WHEN status IN ('queued', 'searching', 'searching_round_1', 'searching_round_2', 'searching_round_3', 'synthesizing', 'reading_pages', 'downloading_docs', 'browser_reading') THEN 1 ELSE 0 END) as active,
+                SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) as queued,
+                SUM(CASE WHEN status = 'awaiting_review' THEN 1 ELSE 0 END) as awaiting_review,
+                SUM(CASE WHEN status IN ('searching', 'searching_round_1', 'searching_round_2', 'searching_round_3', 'synthesizing', 'reading_pages', 'downloading_docs', 'browser_reading', 'agent_researching', 'agent_improving', 'writing') THEN 1 ELSE 0 END) as active,
                 SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled,
                 SUM(COALESCE(word_count, 0)) as total_words,
                 SUM(CASE WHEN added_to_wiki = 1 THEN 1 ELSE 0 END) as added_to_wiki
