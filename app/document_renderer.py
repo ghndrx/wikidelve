@@ -34,7 +34,10 @@ _DEFAULT_CSS = """
 @page {
     size: A4;
     margin: 2cm 2cm 2.5cm 2cm;
-    @bottom-center { content: counter(page) " / " counter(pages); }
+    /* Nested at-rules like @bottom-center aren't supported by
+     * xhtml2pdf; page numbers go in a footer block in the body
+     * (rendered manually if needed) or we live without them in
+     * MVP. Worth bringing back if/when we swap to weasyprint. */
 }
 body {
     font-family: "Helvetica", "Arial", sans-serif;
@@ -135,7 +138,16 @@ def _expand_citations(markdown_text: str) -> tuple[str, list[dict]]:
         target = match.group(1).strip()
         if target not in seen:
             seen[target] = len(seen) + 1
-            kb, _, slug = target.partition("/")
+            # `[ref:foo]` (no kb prefix) defaults to personal kb;
+            # `[ref:work/foo]` keeps the kb intact. Without this
+            # branch, partition("/") on "foo" returned kb="foo"
+            # which silently invented a kb of the same name as the
+            # slug — confusing to the citation render and broken
+            # links in the generated bibliography.
+            if "/" in target:
+                kb, _, slug = target.partition("/")
+            else:
+                kb, slug = "personal", target
             refs.append({
                 "n": seen[target],
                 "kb": kb or "personal",
@@ -172,9 +184,15 @@ def render_html(
     """Markdown source → standalone HTML doc string. Useful for
     previews and as the input to the PDF stage."""
     body, refs = _expand_citations(markdown_text)
+    # NB: ``toc`` extension was useful for in-page nav but injects
+    # ``id="..."`` attributes on every heading which (a) bloats the
+    # rendered PDF needlessly and (b) makes the HTML output
+    # awkward to assert against in tests. We skip it here — the
+    # PDF doesn't need anchor jumps and the HTML preview can rely
+    # on heading text alone.
     html_body = _md.markdown(
         body,
-        extensions=["fenced_code", "tables", "toc", "sane_lists"],
+        extensions=["fenced_code", "tables", "sane_lists"],
     )
     refs_html = _references_html(refs)
     css = _DEFAULT_CSS + ("\n" + extra_css if extra_css else "")
