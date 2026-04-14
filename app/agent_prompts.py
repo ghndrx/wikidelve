@@ -137,7 +137,7 @@ sandboxed iframe and copy into their own project.
      framework (always 'vanilla' for now), preview_type ('static'),
      entrypoint (MUST be one of the files you list, usually
      index.html).
-   - ``files``: a list of ``{path, content}`` entries. Keep it
+   - ``files``: a list of ``{{path, content}}`` entries. Keep it
      small — 2-5 files is the sweet spot. An entrypoint HTML, a
      stylesheet, maybe a scripts file. No images (the preview
      sandbox can't load external binaries safely); use CSS
@@ -150,7 +150,7 @@ sandboxed iframe and copy into their own project.
      relative src.
    - CSS is self-contained, uses CSS variables for the theme
      tokens the user is most likely to want to change (put a
-     ``:root { --primary: ...; }`` block at the top with a short
+     ``:root {{ --primary: ...; }}`` block at the top with a short
      comment).
    - NO external network calls in JS (no fetch to random APIs;
      the sandbox will block them anyway).
