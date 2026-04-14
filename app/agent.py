@@ -29,24 +29,51 @@ logger = logging.getLogger("kb-service.agent")
 # Model resolution
 # ---------------------------------------------------------------------------
 
-def _resolve_model() -> str:
-    """Map WikiDelve's LLM_PROVIDER env var to a LangChain model identifier."""
-    from app.config import LLM_PROVIDER, BEDROCK_MODEL
+def _resolve_model():
+    """Return a LangChain chat model identifier or instance for the
+    agent to drive its loop.
 
-    if LLM_PROVIDER == "bedrock":
+    Minimax is exposed via an OpenAI-compatible endpoint, so we
+    return an instantiated ``ChatOpenAI`` pointed at MINIMAX_BASE —
+    that matches what the rest of the app already uses (app.llm)
+    and keeps the agent on the same quota/budget as synthesis.
+
+    Bedrock / Anthropic providers return the standard LangChain
+    string form, which create_deep_agent resolves internally.
+    """
+    from app.config import (
+        LLM_PROVIDER, BEDROCK_MODEL,
+        MINIMAX_API_KEY, MINIMAX_BASE, MINIMAX_MODEL, MINIMAX_TIMEOUT,
+    )
+
+    provider = (LLM_PROVIDER or "minimax").lower()
+
+    if provider == "minimax":
+        if not MINIMAX_API_KEY:
+            raise RuntimeError(
+                "LLM_PROVIDER=minimax but MINIMAX_API_KEY is not set"
+            )
+        from langchain_openai import ChatOpenAI
+        # Minimax exposes /chat/completions in OpenAI format. The
+        # agent loop uses temperature=0.2 (deterministic-ish) and a
+        # generous per-call timeout because synthesis steps run long.
+        return ChatOpenAI(
+            model=MINIMAX_MODEL,
+            base_url=MINIMAX_BASE,
+            api_key=MINIMAX_API_KEY,
+            temperature=0.2,
+            timeout=MINIMAX_TIMEOUT,
+            max_retries=4,
+        )
+
+    if provider == "bedrock":
         return f"bedrock:{BEDROCK_MODEL}"
-    elif LLM_PROVIDER == "anthropic":
+
+    if provider == "anthropic":
         return "anthropic:claude-sonnet-4-6"
-    elif LLM_PROVIDER == "minimax":
-        # DeepAgents doesn't have a native Minimax provider —
-        # fall back to Bedrock or Anthropic for the agent loop.
-        # Minimax is still used by WikiDelve's internal functions (llm_chat).
-        from app.config import BEDROCK_MODEL as bm
-        if bm:
-            return f"bedrock:{bm}"
-        return "anthropic:claude-sonnet-4-6"
-    else:
-        return "anthropic:claude-sonnet-4-6"
+
+    # Unknown — fail loud rather than silently picking a wrong provider.
+    raise RuntimeError(f"Unsupported LLM_PROVIDER for agent: {provider!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +256,11 @@ async def run_agent_improve(
     try:
         result = await agent.ainvoke(
             {"messages": [{"role": "user", "content": user_msg}]},
-            config={"recursion_limit": 80},
+            # 120 matches the research agent's ballpark. The pilot
+            # showed occasional overruns at 80 on topics where the
+            # agent does more sub-topic searches than our prompt
+            # budget suggests; 120 absorbs that without costing much.
+            config={"recursion_limit": 120},
         )
         final_message = result["messages"][-1]
         content = (
