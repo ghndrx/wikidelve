@@ -198,6 +198,41 @@ async def find_related_articles(kb: str, slug: str) -> str:
     return json.dumps(related, indent=2, default=str)
 
 
+@tool
+async def write_scaffold_files(kb: str, manifest: dict, files: list) -> str:
+    """Write a plug-and-play scaffold (template package) to storage.
+
+    This is the scaffold agent's primary output tool. Use it INSTEAD
+    of write_article when producing a code template the user can
+    preview in a sandboxed iframe and copy.
+
+    Args:
+        kb: knowledge base name (use the current KB).
+        manifest: dict with title, description, scaffold_type,
+            framework, preview_type, entrypoint. The entrypoint must
+            be one of the file paths in `files`.
+        files: list of {"path": str, "content": str} entries. Paths
+            are relative to the scaffold root (no leading /, no ..).
+            256KB per file max, 2MB total max, 50 files max.
+
+    Returns the resulting scaffold slug on success."""
+    from app.scaffolds import create_scaffold
+
+    if not isinstance(manifest, dict):
+        return json.dumps({"error": "manifest must be a dict"})
+    if not isinstance(files, list):
+        return json.dumps({"error": "files must be a list"})
+    try:
+        slug = create_scaffold(kb, manifest, files)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({
+        "slug": slug, "kb": kb,
+        "preview_url": f"/scaffolds/{kb}/{slug}",
+        "file_count": len(files),
+    })
+
+
 # ---------------------------------------------------------------------------
 # All tools exported
 # ---------------------------------------------------------------------------
@@ -209,6 +244,7 @@ ALL_TOOLS = [
     get_article,
     list_articles,
     write_article,
+    write_scaffold_files,
     check_article_quality,
     enrich_article,
     add_crosslinks,

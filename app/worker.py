@@ -37,6 +37,25 @@ async def shutdown(ctx: dict) -> None:
     logger.info("Worker shutting down")
 
 
+async def scaffold_create_task(
+    ctx: dict, kb_name: str, topic: str, scaffold_type: str, job_id: int,
+) -> dict:
+    """Run the scaffold agent: research + produce a multi-file template."""
+    logger.info(
+        "Starting scaffold agent: job=%d kb=%s topic=%r type=%s",
+        job_id, kb_name, topic, scaffold_type,
+    )
+    try:
+        from app.agent import run_scaffold_agent
+        await run_scaffold_agent(kb_name, topic, scaffold_type, job_id)
+    except Exception as exc:
+        logger.exception("Scaffold agent crashed for job %d", job_id)
+        await db.update_job(job_id, status="error", error=f"Scaffold crash: {exc}")
+        return {"job_id": job_id, "status": "error", "error": str(exc)}
+    job = await db.get_job(job_id)
+    return {"job_id": job_id, "status": job["status"] if job else "unknown"}
+
+
 async def agent_improve_task(
     ctx: dict, kb_name: str, slug: str, job_id: int,
 ) -> dict:
@@ -951,6 +970,7 @@ class WorkerSettings:
         agent_research_task,
         agent_improve_task, agent_resync_kb_task, agent_triage_kb_task,
         agent_resync_cron_task,
+        scaffold_create_task,
         research_task, research_collect_task, research_synthesize_task,
         local_research_task, quality_task,
         enrich_task, crosslink_task,

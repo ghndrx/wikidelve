@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block title %}{{ manifest.title }} - Scaffold{% endblock %}
+
+{% block content %}
+<article class="wiki-article">
+    <header class="article-header">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12px;">
+            <span style="padding: 2px 8px; background: var(--color-surface-alt); border-radius: 4px;">
+                {{ manifest.scaffold_type }}
+            </span>
+            <span style="padding: 2px 8px; background: var(--color-surface-alt); border-radius: 4px;">
+                {{ manifest.framework }}
+            </span>
+            <span style="padding: 2px 8px; background: var(--color-surface-alt); border-radius: 4px;">
+                {{ manifest.files|length }} file{% if manifest.files|length != 1 %}s{% endif %}
+            </span>
+            <span style="color: var(--color-text-muted);">
+                updated {{ manifest.updated }}
+            </span>
+        </div>
+        <h1>{{ manifest.title }}</h1>
+        {% if manifest.description %}
+        <p style="color: var(--color-text-secondary);">{{ manifest.description }}</p>
+        {% endif %}
+    </header>
+
+    {# Preview pane: iframe for web-like scaffolds; skipped for non-visual ones. #}
+    {% set visual_types = ['landing-page', 'dashboard', 'component-kit', 'email-template', 'data-viz'] %}
+    {% if manifest.scaffold_type in visual_types and manifest.entrypoint.endswith('.html') %}
+    <section style="margin: 24px 0;">
+        <h2 style="font-size: 16px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted);">Preview</h2>
+        <div style="border: 1px solid var(--color-border); border-radius: 8px; overflow: hidden; background: #fff;">
+            <iframe
+                src="/sandbox/{{ kb }}/{{ slug }}/"
+                sandbox="allow-scripts"
+                style="width: 100%; height: 600px; border: 0; display: block;"
+                title="Scaffold preview"
+                loading="lazy">
+            </iframe>
+        </div>
+        <p style="font-size: 12px; color: var(--color-text-muted); margin-top: 6px;">
+            Sandboxed iframe. No network access. No parent-window access.
+            <a href="/sandbox/{{ kb }}/{{ slug }}/" target="_blank" rel="noopener">
+                Open preview in new tab →
+            </a>
+        </p>
+    </section>
+    {% else %}
+    <section style="margin: 24px 0;">
+        <h2 style="font-size: 16px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted);">Artifact</h2>
+        <p style="color: var(--color-text-secondary);">
+            This scaffold type ({{ manifest.scaffold_type }}) has no interactive
+            preview — the source files below are the artifact. Copy them into
+            your own project.
+        </p>
+    </section>
+    {% endif %}
+
+    {# File explorer with source view. #}
+    <section style="margin: 24px 0;">
+        <h2 style="font-size: 16px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted);">Files</h2>
+        <div id="scaffold-files">
+            {% for path in manifest.files %}
+            <details style="border: 1px solid var(--color-border); border-radius: 6px; margin-bottom: 6px;">
+                <summary style="padding: 10px 12px; cursor: pointer; font-family: var(--font-mono); font-size: 13px; display: flex; justify-content: space-between; align-items: center;">
+                    <span>
+                        {% if path == manifest.entrypoint %}
+                        <strong>{{ path }}</strong>
+                        <span style="font-size: 11px; padding: 1px 6px; background: var(--color-surface-alt); border-radius: 3px; margin-left: 6px;">entry</span>
+                        {% else %}
+                        {{ path }}
+                        {% endif %}
+                    </span>
+                    <button
+                        class="wiki-btn copy-file-btn"
+                        data-path="{{ path }}"
+                        style="font-size: 11px; padding: 2px 8px;">
+                        Copy
+                    </button>
+                </summary>
+                <pre style="margin: 0; padding: 12px; background: var(--color-surface-alt); overflow-x: auto; font-size: 12px;"><code class="scaffold-file-content" data-path="{{ path }}">Loading...</code></pre>
+            </details>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section style="margin: 24px 0; font-size: 13px; color: var(--color-text-muted);">
+        <p>
+            <a href="/scaffolds">← All scaffolds</a>
+            &nbsp;·&nbsp;
+            <a href="/sandbox/{{ kb }}/{{ slug }}/" target="_blank" rel="noopener">Full preview</a>
+            &nbsp;·&nbsp;
+            <a href="/api/scaffolds/{{ kb }}/{{ slug }}" target="_blank" rel="noopener">Raw manifest</a>
+        </p>
+        {% if manifest.topic %}
+        <p>Generated from topic: <code>{{ manifest.topic }}</code></p>
+        {% endif %}
+    </section>
+</article>
+
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    // Lazy-fetch file contents the first time each <details> expands
+    // so the page load stays fast for scaffolds with many files.
+    var kb = {{ kb|tojson }};
+    var slug = {{ slug|tojson }};
+
+    function loadFile(path, targetEl) {
+        fetch('/sandbox/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/' + path, {cache: 'no-store'})
+            .then(function(r) { return r.text(); })
+            .then(function(text) {
+                targetEl.textContent = text;
+                if (window.hljs) {
+                    window.hljs.highlightElement(targetEl);
+                }
+            })
+            .catch(function(err) {
+                targetEl.textContent = 'Failed to load: ' + err.message;
+            });
+    }
+
+    document.querySelectorAll('details').forEach(function(d) {
+        d.addEventListener('toggle', function() {
+            if (!d.open) return;
+            var codeEl = d.querySelector('.scaffold-file-content');
+            if (!codeEl || codeEl.dataset.loaded === '1') return;
+            codeEl.dataset.loaded = '1';
+            loadFile(codeEl.dataset.path, codeEl);
+        });
+    });
+
+    // Copy button: pulls the already-loaded content, falls back to
+    // fetch if the user hasn't expanded that file yet.
+    document.querySelectorAll('.copy-file-btn').forEach(function(btn) {
+        btn.addEventListener('click', async function(ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var path = btn.dataset.path;
+            var codeEl = document.querySelector('.scaffold-file-content[data-path="' + path + '"]');
+            var text = codeEl && codeEl.dataset.loaded === '1' ? codeEl.textContent : null;
+            if (!text) {
+                var resp = await fetch('/sandbox/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/' + path, {cache: 'no-store'});
+                text = await resp.text();
+            }
+            try {
+                await navigator.clipboard.writeText(text);
+                var orig = btn.textContent;
+                btn.textContent = 'Copied';
+                setTimeout(function() { btn.textContent = orig; }, 1500);
+            } catch (e) {
+                btn.textContent = 'Copy failed';
+            }
+        });
+    });
+})();
+</script>
+{% endblock %}

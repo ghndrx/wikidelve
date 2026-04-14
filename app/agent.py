@@ -19,6 +19,7 @@ from deepagents import create_deep_agent
 from app.agent_tools import ALL_TOOLS, search_web, read_webpage
 from app.agent_prompts import (
     RESEARCH_AGENT_PROMPT, FACT_CHECKER_PROMPT, ARTICLE_IMPROVE_PROMPT,
+    SCAFFOLD_AGENT_PROMPT,
 )
 from app.config import KB_DIRS
 
@@ -335,6 +336,107 @@ async def run_agent_improve(
             kb=kb, topic=f"improve:{slug}", job_id=job_id,
             outcome="error", notes=str(exc)[:200],
         )
+        raise
+
+
+async def create_scaffold_agent(kb: str, topic: str, scaffold_type: str):
+    """Create an agent whose output contract is a multi-file scaffold.
+
+    Same tool surface as the research agent, but steered toward
+    calling ``write_scaffold_files`` instead of ``write_article``.
+    """
+    from app.scaffolds import SCAFFOLD_TYPES
+
+    model = _resolve_model()
+    system_prompt = SCAFFOLD_AGENT_PROMPT.format(
+        topic=topic, scaffold_type=scaffold_type,
+        scaffold_types=", ".join(sorted(SCAFFOLD_TYPES)),
+    )
+
+    return create_deep_agent(
+        model=model,
+        tools=ALL_TOOLS,
+        system_prompt=system_prompt,
+    )
+
+
+async def run_scaffold_agent(
+    kb: str, topic: str, scaffold_type: str, job_id: int,
+) -> dict:
+    """Run the scaffold agent for a single topic.
+
+    On success the agent will have called ``write_scaffold_files``
+    which persists the manifest + files to storage. The job row's
+    ``content`` gets the agent's final narrative (useful for audit /
+    future refinement), and ``source_params`` is stamped with the
+    resulting slug so the API can surface the preview URL directly.
+    """
+    from app import db
+    import asyncio as _asyncio
+
+    # Trust-but-verify the scaffold_type lives in the enum; fall
+    # back to 'other' so the agent doesn't hard-fail on typos.
+    from app.scaffolds import SCAFFOLD_TYPES
+    if scaffold_type not in SCAFFOLD_TYPES:
+        scaffold_type = "other"
+
+    agent = await create_scaffold_agent(kb=kb, topic=topic, scaffold_type=scaffold_type)
+
+    await db.update_job(job_id, status="agent_scaffolding")
+    logger.info(
+        "Scaffold agent started: job=%d kb=%s topic=%r type=%s",
+        job_id, kb, topic, scaffold_type,
+    )
+
+    user_msg = (
+        f"Produce a '{scaffold_type}' scaffold for: {topic}\n\n"
+        f"Research real reference implementations first, then call "
+        f"write_scaffold_files with a complete, runnable set of "
+        f"files. Use kb='{kb}'. Framework must be 'vanilla' for this "
+        f"MVP — no frameworks, no bundlers. When you've called the "
+        f"tool successfully, stop."
+    )
+
+    try:
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": user_msg}]},
+            config={"recursion_limit": 80},
+        )
+        final_message = result["messages"][-1]
+        content = (
+            final_message.content
+            if isinstance(final_message.content, str)
+            else str(final_message.content)
+        )
+        # Try to pull the slug off the last tool result — scaffolds
+        # tool returns JSON {slug, kb, preview_url, file_count}.
+        import json as _json, re as _re
+        slug_match = _re.search(r'"slug"\s*:\s*"([^"]+)"', content)
+        slug = slug_match.group(1) if slug_match else None
+        await db.update_job(
+            job_id, status="complete", content=content,
+            source_params=_json.dumps({
+                "scaffold_slug": slug, "scaffold_type": scaffold_type,
+                "kb": kb, "topic": topic,
+            }),
+        )
+        logger.info(
+            "Scaffold agent complete: job=%d slug=%s", job_id, slug,
+        )
+        return result
+    except (_asyncio.CancelledError, _asyncio.TimeoutError):
+        logger.warning("Scaffold agent cancelled: job=%d", job_id)
+        try:
+            await db.update_job(
+                job_id, status="error",
+                error="Scaffold agent exceeded worker timeout",
+            )
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        logger.exception("Scaffold agent failed: job=%d", job_id)
+        await db.update_job(job_id, status="error", error=str(exc))
         raise
 
 

@@ -1001,6 +1001,173 @@ async def api_agent_resync(request: Request, kb_name: str):
     }
 
 
+# ---------------------------------------------------------------------------
+# Scaffolds — plug-and-play template packages
+#
+# A scaffold is a small multi-file code template (HTML/CSS/JS for MVP;
+# React/Vue later) produced by the scaffold agent from a topic + type.
+# It lives under ``scaffolds/<slug>/`` in the KB's storage and is
+# rendered in a sandboxed iframe at /sandbox/<kb>/<slug>.
+# ---------------------------------------------------------------------------
+
+@app.post("/api/scaffolds/{kb_name}/create")
+async def api_scaffold_create(request: Request, kb_name: str):
+    """Queue a scaffold-agent run.
+
+    Body: {"topic": "...", "scaffold_type": "landing-page"}
+    Returns: {job_id, status: queued}
+    """
+    from app.scaffolds import SCAFFOLD_TYPES
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    topic = (body.get("topic") or "").strip()
+    scaffold_type = (body.get("scaffold_type") or "other").strip()
+    if not topic or len(topic) < 3:
+        raise HTTPException(status_code=400, detail="topic is required (min 3 chars)")
+    if scaffold_type not in SCAFFOLD_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"scaffold_type must be one of: {sorted(SCAFFOLD_TYPES)}",
+        )
+
+    job_id = await db.create_job(
+        f"scaffold:{scaffold_type}:{topic[:80]}",
+        job_type="scaffold",
+    )
+    redis = request.app.state.redis
+    await redis.enqueue_job(
+        "scaffold_create_task", kb_name, topic, scaffold_type, job_id,
+        _queue_name=ARQ_QUEUE_NAME,
+    )
+    return {
+        "job_id": job_id, "status": "queued",
+        "kb": kb_name, "topic": topic, "scaffold_type": scaffold_type,
+    }
+
+
+@app.get("/api/scaffolds/{kb_name}")
+async def api_scaffold_list(kb_name: str):
+    """List all scaffolds in a KB."""
+    from app.scaffolds import list_scaffolds
+    return {"kb": kb_name, "scaffolds": list_scaffolds(kb_name)}
+
+
+@app.get("/api/scaffolds/{kb_name}/{slug}")
+async def api_scaffold_manifest(kb_name: str, slug: str):
+    """Return the manifest for a single scaffold."""
+    from app.scaffolds import get_manifest
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="scaffold not found")
+    return manifest
+
+
+@app.delete("/api/scaffolds/{kb_name}/{slug}")
+async def api_scaffold_delete(kb_name: str, slug: str):
+    from app.scaffolds import get_manifest, delete_scaffold
+    if not get_manifest(kb_name, slug):
+        raise HTTPException(status_code=404, detail="scaffold not found")
+    delete_scaffold(kb_name, slug)
+    return {"status": "deleted", "kb": kb_name, "slug": slug}
+
+
+# Common MIME types we serve from /sandbox/. Anything unknown → plain
+# text so the browser can't execute it as a script by accident.
+_SCAFFOLD_MIMES = {
+    "html": "text/html; charset=utf-8",
+    "htm": "text/html; charset=utf-8",
+    "css": "text/css; charset=utf-8",
+    "js": "application/javascript; charset=utf-8",
+    "mjs": "application/javascript; charset=utf-8",
+    "json": "application/json; charset=utf-8",
+    "svg": "image/svg+xml",
+    "txt": "text/plain; charset=utf-8",
+    "md": "text/markdown; charset=utf-8",
+}
+
+
+@app.get("/sandbox/{kb_name}/{slug}/{rel_path:path}")
+async def view_scaffold_file(kb_name: str, slug: str, rel_path: str):
+    """Serve a scaffold file with strict CSP for iframe rendering.
+
+    The sandbox route is deliberately the ONLY place scaffold file
+    content leaves storage as executable HTML/JS. Callers should
+    embed it in an ``<iframe sandbox="allow-scripts">`` — our CSP
+    doubles up on the sandboxing in case the iframe attribute is
+    dropped by a proxy.
+    """
+    from app.scaffolds import get_file, get_manifest
+    from starlette.responses import Response
+
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="scaffold not found")
+
+    # Empty rel_path → redirect to entrypoint (lets <iframe src>
+    # point at the slug root and Just Work).
+    if not rel_path:
+        from starlette.responses import RedirectResponse
+        return RedirectResponse(
+            url=f"/sandbox/{kb_name}/{slug}/{manifest['entrypoint']}",
+            status_code=307,
+        )
+
+    content = get_file(kb_name, slug, rel_path)
+    if content is None:
+        raise HTTPException(status_code=404, detail=f"file not found: {rel_path}")
+
+    ext = rel_path.rsplit(".", 1)[-1].lower() if "." in rel_path else ""
+    mime = _SCAFFOLD_MIMES.get(ext, "text/plain; charset=utf-8")
+    # CSP: no network, no parent, no inline-except-unsafe-for-scaffold.
+    # 'unsafe-inline' is needed because scaffolds bundle small inline
+    # <style>/<script> blocks; network is closed so this can't phone
+    # home even if the agent emitted something janky.
+    csp = (
+        "default-src 'self' data:; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "connect-src 'none'; "
+        "frame-ancestors 'self';"
+    )
+    headers = {
+        "Content-Security-Policy": csp,
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+    }
+    return Response(content, media_type=mime, headers=headers)
+
+
+@app.get("/scaffolds/{kb_name}/{slug}", response_class=HTMLResponse)
+async def view_scaffold(request: Request, kb_name: str, slug: str):
+    """Scaffold viewer page — description + sandboxed iframe + file listing."""
+    from app.scaffolds import get_manifest
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="scaffold not found")
+    return render(
+        "scaffold_view.html",
+        kb=kb_name, slug=slug, manifest=manifest,
+    )
+
+
+@app.get("/scaffolds", response_class=HTMLResponse)
+async def browse_scaffolds(request: Request, kb: str = "personal"):
+    from app.scaffolds import list_scaffolds, SCAFFOLD_TYPES
+    items = list_scaffolds(kb)
+    return render(
+        "scaffolds_browse.html",
+        kb=kb, items=items,
+        types=sorted(SCAFFOLD_TYPES),
+    )
+
+
 @app.get("/api/graph/data")
 async def api_graph_data():
     """Return the full knowledge graph as nodes + edges for D3.js visualization."""

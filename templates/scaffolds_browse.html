@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Scaffolds{% endblock %}
+
+{% block content %}
+<section class="wiki-article">
+    <header class="article-header">
+        <h1>Scaffolds</h1>
+        <p style="color: var(--color-text-secondary);">
+            Plug-and-play templates researched and synthesized by the scaffold agent.
+            Copy the files into your own project or preview them in a sandboxed iframe.
+        </p>
+    </header>
+
+    <div style="margin: 16px 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+        <label style="font-size: 12px; color: var(--color-text-muted);">Filter:</label>
+        <button class="wiki-btn scaffold-filter active" data-type="all" style="font-size: 12px;">All</button>
+        {% for t in types %}
+        <button class="wiki-btn scaffold-filter" data-type="{{ t }}" style="font-size: 12px;">{{ t }}</button>
+        {% endfor %}
+    </div>
+
+    <div id="scaffold-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 16px;">
+        {% for s in items %}
+        <a href="/scaffolds/{{ kb }}/{{ s.slug }}" class="scaffold-card" data-type="{{ s.scaffold_type }}"
+           style="display: block; padding: 16px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); text-decoration: none; color: inherit;">
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); margin-bottom: 6px;">
+                {{ s.scaffold_type }} · {{ s.framework }}
+            </div>
+            <div style="font-weight: 600; margin-bottom: 4px;">{{ s.title }}</div>
+            <div style="font-size: 12px; color: var(--color-text-muted);">
+                {{ s.created }}
+            </div>
+        </a>
+        {% else %}
+        <div style="grid-column: 1 / -1; padding: 32px; text-align: center; color: var(--color-text-muted); border: 1px dashed var(--color-border); border-radius: 8px;">
+            <p>No scaffolds yet for KB <code>{{ kb }}</code>.</p>
+            <p style="font-size: 13px; margin-top: 8px;">
+                Create one via
+                <code>POST /api/scaffolds/{{ kb }}/create</code>
+                with <code>{topic, scaffold_type}</code>.
+            </p>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    var buttons = document.querySelectorAll('.scaffold-filter');
+    var cards = document.querySelectorAll('.scaffold-card');
+    buttons.forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var t = btn.dataset.type;
+            buttons.forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            cards.forEach(function(c) {
+                c.style.display = (t === 'all' || c.dataset.type === t) ? '' : 'none';
+            });
+        });
+    });
+})();
+</script>
+{% endblock %}
