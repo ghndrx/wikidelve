@@ -710,6 +710,48 @@ CHAT_TOOLS: list[dict] = [
         },
     },
     {
+        "name": "improve_article",
+        "description": "Run the improvement agent against an existing "
+        "article. The agent reads it, picks the 3-5 weakest spots, "
+        "researches only those, and rewrites with citations. Use this "
+        "when the user asks to 'improve', 'deepen', 'upgrade', or "
+        "'flesh out' a specific article. Returns the job_id.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kb": {"type": "string"},
+                "slug": {
+                    "type": "string",
+                    "description": "Slug of the article to improve",
+                },
+            },
+            "required": ["kb", "slug"],
+        },
+    },
+    {
+        "name": "resync_kb",
+        "description": "Queue the improvement agent for every article "
+        "in a KB. Expensive — hundreds of agent runs. Use only when "
+        "the user asks to 'resync the KB', 'improve all articles', or "
+        "similar. Supports dry_run=true to preview without queueing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kb": {"type": "string"},
+                "limit": {
+                    "type": "integer",
+                    "description": "Cap the number of articles. Omit for all.",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "True = preview counts, queue nothing",
+                    "default": False,
+                },
+            },
+            "required": ["kb"],
+        },
+    },
+    {
         "name": "refine_research",
         "description": "Queue a follow-up research_task scoped to a "
         "specific section of an existing article. Use this when the user "
@@ -804,6 +846,40 @@ async def run_tool(name: str, tool_input: dict, *, redis: Any = None) -> dict:
                 _queue_name=ARQ_QUEUE_NAME,
             )
             return {"job_id": job_id, "status": "queued", "topic": topic, "kb": kb}
+
+        if name == "improve_article":
+            if redis is None:
+                return {"error": "Tool execution requires a redis pool"}
+            kb = tool_input["kb"]
+            slug = tool_input["slug"]
+            article = get_article(kb, slug)
+            if not article:
+                return {"error": f"Article not found: {kb}/{slug}"}
+            job_id = await db.create_job(
+                f"improve:{kb}/{slug}", job_type="agent_improve",
+            )
+            from app.config import ARQ_QUEUE_NAME
+            await redis.enqueue_job(
+                "agent_improve_task", kb, slug, job_id,
+                _queue_name=ARQ_QUEUE_NAME,
+            )
+            return {"job_id": job_id, "status": "queued", "kb": kb, "slug": slug}
+
+        if name == "resync_kb":
+            if redis is None:
+                return {"error": "Tool execution requires a redis pool"}
+            kb = tool_input["kb"]
+            limit = tool_input.get("limit")
+            dry_run = bool(tool_input.get("dry_run", False))
+            from app.config import ARQ_QUEUE_NAME
+            await redis.enqueue_job(
+                "agent_resync_kb_task", kb, limit, dry_run,
+                _queue_name=ARQ_QUEUE_NAME,
+            )
+            return {
+                "status": "queued", "kb": kb,
+                "limit": limit, "dry_run": dry_run,
+            }
 
         if name == "refine_research":
             # Scoped follow-up research for an existing article.

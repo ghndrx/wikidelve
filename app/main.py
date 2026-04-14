@@ -844,6 +844,68 @@ async def api_build_graph(request: Request):
     return {"status": "queued", "kb": kb_name, "action": "build_graph"}
 
 
+@app.post("/api/articles/{kb_name}/{slug}/agent-improve")
+async def api_agent_improve(request: Request, kb_name: str, slug: str):
+    """Run the improvement agent against a single existing article.
+
+    The agent reads the article, picks 3-5 weak sections, researches
+    just those, and rewrites with citations. Returns the job id so
+    the caller can poll /api/research/status.
+    """
+    from app.wiki import get_article
+    article = get_article(kb_name, slug)
+    if not article:
+        raise HTTPException(
+            status_code=404, detail=f"Article not found: {kb_name}/{slug}",
+        )
+    job_id = await db.create_job(
+        f"improve:{kb_name}/{slug}", job_type="agent_improve",
+    )
+    redis = request.app.state.redis
+    await redis.enqueue_job(
+        "agent_improve_task", kb_name, slug, job_id,
+        _queue_name=ARQ_QUEUE_NAME,
+    )
+    return {
+        "job_id": job_id, "status": "queued",
+        "kb": kb_name, "slug": slug,
+    }
+
+
+@app.post("/api/kb/{kb_name}/agent-resync")
+async def api_agent_resync(request: Request, kb_name: str):
+    """Queue an improvement agent run for every article in a KB.
+
+    Body (optional JSON): {"limit": N, "dry_run": bool}. dry_run=true
+    reports what would be queued without enqueueing anything.
+    """
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    if not isinstance(body, dict):
+        body = {}
+    limit = body.get("limit")
+    if limit is not None:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="limit must be int")
+    dry_run = bool(body.get("dry_run", False))
+
+    redis = request.app.state.redis
+    await redis.enqueue_job(
+        "agent_resync_kb_task", kb_name, limit, dry_run,
+        _queue_name=ARQ_QUEUE_NAME,
+    )
+    return {
+        "status": "queued", "kb": kb_name,
+        "limit": limit, "dry_run": dry_run,
+        "action": "agent_resync",
+    }
+
+
 @app.get("/api/graph/data")
 async def api_graph_data():
     """Return the full knowledge graph as nodes + edges for D3.js visualization."""

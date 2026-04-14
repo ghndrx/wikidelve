@@ -17,7 +17,9 @@ import logging
 from deepagents import create_deep_agent
 
 from app.agent_tools import ALL_TOOLS, search_web, read_webpage
-from app.agent_prompts import RESEARCH_AGENT_PROMPT, FACT_CHECKER_PROMPT
+from app.agent_prompts import (
+    RESEARCH_AGENT_PROMPT, FACT_CHECKER_PROMPT, ARTICLE_IMPROVE_PROMPT,
+)
 from app.config import KB_DIRS
 
 logger = logging.getLogger("kb-service.agent")
@@ -151,6 +153,105 @@ async def run_agent_research(
             notes=str(exc)[:200],
         )
 
+        raise
+
+
+async def create_improve_agent(kb: str, slug: str):
+    """Create an agent specialized for improving an existing article.
+
+    Same tool surface as the research agent, but a different system
+    prompt that steers it toward surgical patches rather than
+    greenfield synthesis.
+    """
+    from app.agent_memory import get_kb_context
+
+    kb_list = ", ".join(KB_DIRS.keys())
+    model = _resolve_model()
+    kb_context = await get_kb_context(kb)
+
+    system_prompt = ARTICLE_IMPROVE_PROMPT.format(
+        kb_list=kb_list, kb=kb, slug=slug,
+    )
+    system_prompt += f"\n\n## KB Context (from memory)\n{kb_context}"
+
+    fact_checker = {
+        "name": "fact-checker",
+        "description": "Verify claims by searching for supporting or contradicting evidence.",
+        "system_prompt": FACT_CHECKER_PROMPT,
+        "tools": [search_web, read_webpage],
+        "model": model,
+    }
+
+    return create_deep_agent(
+        model=model,
+        tools=ALL_TOOLS,
+        subagents=[fact_checker],
+        system_prompt=system_prompt,
+    )
+
+
+async def run_agent_improve(
+    kb: str, slug: str, job_id: int,
+) -> dict:
+    """Run the improve agent against an existing wiki article.
+
+    The agent reads the article, identifies weak spots, researches
+    just those, and writes an updated version. Fuzzy-merge in
+    create_or_update_article routes the output back into the same
+    slug so we don't fork.
+    """
+    from app import db
+    from app.wiki import get_article
+    from app.agent_memory import record_research_episode
+
+    article = get_article(kb, slug)
+    if not article:
+        await db.update_job(
+            job_id, status="error",
+            error=f"Article not found: {kb}/{slug}",
+        )
+        return {"error": f"Article not found: {kb}/{slug}"}
+
+    title = article.get("title") or slug.replace("-", " ").title()
+    agent = await create_improve_agent(kb=kb, slug=slug)
+
+    await db.update_job(job_id, status="agent_improving")
+    logger.info("Agent improve started: job=%d kb=%s slug=%s", job_id, kb, slug)
+
+    user_msg = (
+        f"Improve the existing wiki article '{title}' (slug: {slug}) in "
+        f"the '{kb}' knowledge base. Read the current version first, "
+        f"identify its weakest sections, research only those, and "
+        f"rewrite with citations. If the article is already solid, "
+        f"stop and say so."
+    )
+
+    try:
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": user_msg}]},
+            config={"recursion_limit": 80},
+        )
+        final_message = result["messages"][-1]
+        content = (
+            final_message.content
+            if isinstance(final_message.content, str)
+            else str(final_message.content)
+        )
+        await db.update_job(job_id, status="complete", content=content)
+        logger.info("Agent improve complete: job=%d slug=%s", job_id, slug)
+
+        await record_research_episode(
+            kb=kb, topic=f"improve:{slug}", job_id=job_id,
+            outcome="complete", word_count=len(content.split()),
+        )
+        return result
+    except Exception as exc:
+        logger.exception("Agent improve failed: job=%d slug=%s", job_id, slug)
+        await db.update_job(job_id, status="error", error=str(exc))
+        await record_research_episode(
+            kb=kb, topic=f"improve:{slug}", job_id=job_id,
+            outcome="error", notes=str(exc)[:200],
+        )
         raise
 
 

@@ -37,6 +37,137 @@ async def shutdown(ctx: dict) -> None:
     logger.info("Worker shutting down")
 
 
+async def agent_improve_task(
+    ctx: dict, kb_name: str, slug: str, job_id: int,
+) -> dict:
+    """Run the improvement agent against a single existing article.
+
+    The agent reads the article, picks 3-5 weak spots, researches
+    just those, and rewrites. Fuzzy-merge in create_or_update_article
+    (called by the agent's write_article tool) routes the result
+    back into the same slug, so the article stays in place.
+    """
+    logger.info(
+        "Starting AGENT improve: job_id=%d, kb='%s', slug='%s'",
+        job_id, kb_name, slug,
+    )
+    try:
+        from app.agent import run_agent_improve
+        await run_agent_improve(kb_name, slug, job_id)
+    except Exception as exc:
+        logger.exception("Agent improve crashed for %s/%s (job %d)", kb_name, slug, job_id)
+        await db.update_job(job_id, status="error", error=f"Agent improve crash: {exc}")
+        return {"job_id": job_id, "status": "error", "error": str(exc)}
+
+    # Auto-embed + rebuild graph for the touched article so hybrid
+    # search reflects the new content. Best-effort.
+    try:
+        await embed_article(kb_name, slug)
+        await build_graph_for_article(kb_name, slug)
+    except Exception as embed_exc:
+        logger.warning("Post-improve embed failed for %s/%s: %s", kb_name, slug, embed_exc)
+
+    # Stamp the admin link — slug is known up-front for improve jobs,
+    # so don't rely on _find_article_slug guessing from the topic.
+    job = await db.get_job(job_id)
+    if job and job.get("status") == "complete":
+        try:
+            await db.update_job(
+                job_id, added_to_wiki=1, wiki_slug=slug, wiki_kb=kb_name,
+            )
+            await db.log_article_update(
+                article_slug=slug, kb_name=kb_name,
+                job_id=job_id, change_type="improved",
+            )
+        except Exception as exc:
+            logger.warning("Failed to stamp wiki link on improve job %d: %s", job_id, exc)
+
+    return {
+        "job_id": job_id,
+        "kb": kb_name,
+        "slug": slug,
+        "status": job["status"] if job else "unknown",
+    }
+
+
+async def agent_resync_kb_task(
+    ctx: dict, kb_name: str, limit: int | None = None,
+    dry_run: bool = False, concurrency: int = 2,
+) -> dict:
+    """Walk a KB and queue an agent_improve_task for each article.
+
+    Concurrency caps how many improve jobs are in-flight at once —
+    we enqueue all jobs upfront (arq's max_jobs naturally caps
+    actual parallelism) but we throttle enqueue rate so redis
+    doesn't swallow 400 jobs in one gulp.
+
+    dry_run: enqueues nothing, just reports what would be queued.
+    """
+    import asyncio
+    from app.wiki import get_articles_cached
+    from app.config import ARQ_QUEUE_NAME
+
+    articles = await get_articles_cached(kb_name)
+    if limit:
+        articles = articles[:limit]
+
+    logger.info(
+        "Agent resync: kb=%s, %d articles, dry_run=%s",
+        kb_name, len(articles), dry_run,
+    )
+
+    if dry_run:
+        return {
+            "kb": kb_name,
+            "dry_run": True,
+            "would_queue": len(articles),
+            "slugs": [a.get("slug") for a in articles[:20]],
+        }
+
+    redis = ctx.get("redis")
+    if redis is None:
+        return {"error": "resync requires a redis pool in arq ctx"}
+
+    queued: list[dict] = []
+    for i, art in enumerate(articles):
+        slug = art.get("slug")
+        if not slug:
+            continue
+        try:
+            job_id = await db.create_job(
+                f"improve:{kb_name}/{slug}",
+                job_type="agent_improve",
+            )
+            await redis.enqueue_job(
+                "agent_improve_task", kb_name, slug, job_id,
+                _queue_name=ARQ_QUEUE_NAME,
+            )
+            queued.append({"slug": slug, "job_id": job_id})
+        except Exception as exc:
+            logger.warning("resync: failed to queue %s/%s: %s", kb_name, slug, exc)
+        # Lightweight pacing — avoid a redis thundering herd.
+        if concurrency > 0 and (i + 1) % max(concurrency, 1) == 0:
+            await asyncio.sleep(0.1)
+
+    return {"kb": kb_name, "queued": len(queued), "jobs": queued[:50]}
+
+
+async def agent_resync_cron_task(ctx: dict) -> dict:
+    """Weekly resync of the personal KB, gated on AGENT_RESYNC_CRON env.
+
+    Off by default — set AGENT_RESYNC_CRON=weekly to enable. Resyncs
+    cost a lot of tokens; opt-in is the right default.
+    """
+    import os
+    if os.getenv("AGENT_RESYNC_CRON", "").strip().lower() != "weekly":
+        return {"status": "disabled", "hint": "set AGENT_RESYNC_CRON=weekly to enable"}
+    try:
+        return await agent_resync_kb_task(ctx, "personal", limit=None, dry_run=False)
+    except Exception as exc:
+        logger.exception("Weekly resync cron failed")
+        return {"error": str(exc)}
+
+
 async def agent_research_task(ctx: dict, topic: str, job_id: int, kb_name: str = "personal") -> dict:
     """Run the DeepAgents research agent for a single topic.
 
@@ -716,6 +847,7 @@ class WorkerSettings:
 
     functions = [
         agent_research_task,
+        agent_improve_task, agent_resync_kb_task, agent_resync_cron_task,
         research_task, research_collect_task, research_synthesize_task,
         local_research_task, quality_task,
         enrich_task, crosslink_task,
@@ -732,6 +864,9 @@ class WorkerSettings:
     ]
 
     cron_jobs = [
+        # Weekly agent-driven KB resync (opt-in via AGENT_RESYNC_CRON=weekly).
+        # Runs Sundays at 06:00 UTC.
+        cron(agent_resync_cron_task, weekday="sun", hour=6, minute=0, unique=True),
         # Run local research watches daily at 4am UTC
         cron(local_research_cron_task, hour=4, minute=0, unique=True),
         # Refill candidate topics daily at 3:30am UTC (before the 04:00 run)
