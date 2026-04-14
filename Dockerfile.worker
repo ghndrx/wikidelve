@@ -2,6 +2,22 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
+# Build-time deps for xhtml2pdf's transitive deps (pycairo + pillow):
+#   - gcc / pkg-config / meson are needed to build pycairo from source
+#   - libcairo2-dev provides cairo headers
+#   - libjpeg-dev + zlib1g-dev provide pillow's image codecs
+# All confined to the builder stage; runtime image only needs the
+# matching shared libraries (added below).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        pkg-config \
+        meson \
+        ninja-build \
+        libcairo2-dev \
+        libjpeg-dev \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Upgrade pip first — see Dockerfile comment re CVE-2025-8869 / CVE-2026-1703.
 RUN pip install --no-cache-dir --upgrade 'pip>=26.0' 'setuptools>=78'
 
@@ -12,6 +28,13 @@ RUN pip install --no-cache-dir --prefix=/install -r /build/requirements-worker.t
 FROM python:3.12-slim
 
 WORKDIR /app
+
+# Runtime shared libs for pycairo + pillow. Slim layer (~25MB).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libcairo2 \
+        libjpeg62-turbo \
+        zlib1g \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --upgrade 'pip>=26.0' 'setuptools>=78'
 
