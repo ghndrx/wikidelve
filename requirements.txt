@@ -50,6 +50,21 @@ limits==5.8.0
 Markdown==3.10.2
 markdown-it-py==4.0.0
 xhtml2pdf==0.2.16
+# Agent stack — the Documents chat endpoint invokes the drafting
+# agent synchronously from the app process. Previously these were
+# worker-only deps (agent_improve_task etc. all ran in arq), but
+# interactive chat needs the app container to import app.agent so
+# a user's /chat turn gets a response in-process. Worker still uses
+# the same versions via requirements-worker.txt.
+deepagents==0.5.2
+langchain==1.2.15
+langchain-anthropic==1.4.0
+langchain-aws==1.4.3
+langchain-core==1.2.28
+langchain-openai==1.0.2
+langgraph==1.1.6
+langgraph-checkpoint==4.0.1
+langgraph-prebuilt==1.0.9
 MarkupSafe==3.0.3
 mcp==1.27.0
 mdurl==0.1.2
