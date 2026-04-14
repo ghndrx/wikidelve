@@ -152,6 +152,98 @@ async def agent_resync_kb_task(
     return {"kb": kb_name, "queued": len(queued), "jobs": queued[:50]}
 
 
+async def agent_triage_kb_task(
+    ctx: dict, kb_name: str, threshold: int = 70,
+    limit: int | None = None, dry_run: bool = False,
+    concurrency: int = 2,
+) -> dict:
+    """Score every article in a KB, then queue improve jobs only for
+    articles below ``threshold``.
+
+    Rationale: a full KB resync sends every article through a 3-5min
+    agent loop even when the article is already solid — the pilot
+    showed the agent correctly exits early on good articles, but
+    still consumes one round-trip per. Cheap pre-filter (pure
+    string analysis, no LLM) cuts the improve queue to just the
+    articles that actually need work.
+
+    ``threshold`` is the quality score cutoff (0-100). Anything
+    strictly below gets queued; >= threshold is skipped.
+    ``dry_run`` reports what would be queued without enqueueing.
+    """
+    import asyncio
+    from app.wiki import get_articles_cached
+    from app.quality import score_article_quality
+    from app.config import ARQ_QUEUE_NAME
+
+    articles = await get_articles_cached(kb_name)
+    if limit:
+        articles = articles[:limit]
+
+    below: list[dict] = []
+    above: list[dict] = []
+    for art in articles:
+        slug = art.get("slug")
+        if not slug:
+            continue
+        try:
+            score_info = score_article_quality(kb_name, slug)
+            score = int(score_info.get("score", 0))
+        except Exception as exc:
+            logger.warning("triage: score failed for %s/%s: %s", kb_name, slug, exc)
+            # If we can't score it, queue it — better to agent-improve
+            # the unreadable article than silently skip.
+            below.append({"slug": slug, "score": -1})
+            continue
+        target = below if score < threshold else above
+        target.append({"slug": slug, "score": score, "title": score_info.get("title")})
+
+    logger.info(
+        "triage: kb=%s threshold=%d   below=%d  above=%d  dry_run=%s",
+        kb_name, threshold, len(below), len(above), dry_run,
+    )
+
+    if dry_run:
+        return {
+            "kb": kb_name,
+            "threshold": threshold,
+            "dry_run": True,
+            "below_count": len(below),
+            "above_count": len(above),
+            "worst": sorted(below, key=lambda x: x["score"])[:20],
+            "best": sorted(above, key=lambda x: -x["score"])[:5],
+        }
+
+    redis = ctx.get("redis")
+    if redis is None:
+        return {"error": "triage requires a redis pool in arq ctx"}
+
+    queued: list[dict] = []
+    for i, cand in enumerate(below):
+        slug = cand["slug"]
+        try:
+            job_id = await db.create_job(
+                f"improve:{kb_name}/{slug}", job_type="agent_improve",
+            )
+            await redis.enqueue_job(
+                "agent_improve_task", kb_name, slug, job_id,
+                _queue_name=ARQ_QUEUE_NAME,
+            )
+            queued.append({"slug": slug, "job_id": job_id, "score": cand["score"]})
+        except Exception as exc:
+            logger.warning("triage: failed to queue %s/%s: %s", kb_name, slug, exc)
+        if concurrency > 0 and (i + 1) % max(concurrency, 1) == 0:
+            await asyncio.sleep(0.1)
+
+    return {
+        "kb": kb_name, "threshold": threshold,
+        "scanned": len(articles),
+        "above_threshold": len(above),
+        "queued": len(queued),
+        "sample": queued[:20],
+    }
+
+
 async def agent_resync_cron_task(ctx: dict) -> dict:
     """Weekly resync of the personal KB, gated on AGENT_RESYNC_CRON env.
 
@@ -847,7 +939,8 @@ class WorkerSettings:
 
     functions = [
         agent_research_task,
-        agent_improve_task, agent_resync_kb_task, agent_resync_cron_task,
+        agent_improve_task, agent_resync_kb_task, agent_triage_kb_task,
+        agent_resync_cron_task,
         research_task, research_collect_task, research_synthesize_task,
         local_research_task, quality_task,
         enrich_task, crosslink_task,
@@ -896,5 +989,10 @@ class WorkerSettings:
     # timeout means a retry costs another 30 minutes. Surface the
     # failure once; user can re-queue manually if they want.
     max_tries = 1
-    max_jobs = 15
+    # 6 workers × max_jobs = ceiling on concurrent agent runs against
+    # Minimax. The full-resync pilot blew up at ~83 concurrent (45%
+    # error rate on throttling). 4/worker = 24 cap is below the pilot
+    # sweet spot of 25-30 we saw succeeding cleanly. Short tasks
+    # (embeddings, graph, search) still parallelise fine at this cap.
+    max_jobs = 4
     poll_delay = 0.3

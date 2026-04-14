@@ -872,6 +872,48 @@ async def api_agent_improve(request: Request, kb_name: str, slug: str):
     }
 
 
+@app.post("/api/kb/{kb_name}/agent-triage")
+async def api_agent_triage(request: Request, kb_name: str):
+    """Score the KB and agent-improve only articles below threshold.
+
+    Body: {"threshold": 70, "limit": N, "dry_run": bool}
+
+    Running dry_run=true is the recommended first step — it returns
+    how many articles are below/above the threshold so you can pick
+    a sensible cutoff before actually queueing the improve batch.
+    """
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    if not isinstance(body, dict):
+        body = {}
+    threshold = body.get("threshold", 70)
+    try:
+        threshold = int(threshold)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="threshold must be int")
+    limit = body.get("limit")
+    if limit is not None:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="limit must be int")
+    dry_run = bool(body.get("dry_run", False))
+
+    redis = request.app.state.redis
+    await redis.enqueue_job(
+        "agent_triage_kb_task", kb_name, threshold, limit, dry_run,
+        _queue_name=ARQ_QUEUE_NAME,
+    )
+    return {
+        "status": "queued", "kb": kb_name,
+        "threshold": threshold, "limit": limit, "dry_run": dry_run,
+        "action": "agent_triage",
+    }
+
+
 @app.post("/api/kb/{kb_name}/agent-resync")
 async def api_agent_resync(request: Request, kb_name: str):
     """Queue an improvement agent run for every article in a KB.
