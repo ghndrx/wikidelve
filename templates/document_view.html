@@ -153,6 +153,14 @@
             <span class="version-pill{% if entry.v == manifest.current_version %} current{% endif %}" data-v="{{ entry.v }}" title="{{ entry.trigger }}">v{{ entry.v }}</span>
             {% endfor %}
         </div>
+        <div style="padding: 8px 12px; border-top: 1px solid var(--color-border); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; background: var(--color-surface);">
+            <span style="font-size: 11px; color: var(--color-text-muted); margin-right: 4px;">Generate:</span>
+            <button class="wiki-btn output-btn" data-output="briefing" style="font-size: 11px; padding: 3px 8px;">Briefing</button>
+            <button class="wiki-btn output-btn" data-output="faq" style="font-size: 11px; padding: 3px 8px;">FAQ</button>
+            <button class="wiki-btn output-btn" data-output="study-guide" style="font-size: 11px; padding: 3px 8px;">Study guide</button>
+            <button class="wiki-btn output-btn" data-output="timeline" style="font-size: 11px; padding: 3px 8px;">Timeline</button>
+            <span id="output-status" style="font-size: 11px; color: var(--color-text-muted); margin-left: auto;"></span>
+        </div>
     </div>
 
     <!-- Right: Chat -->
@@ -201,6 +209,34 @@
     var statusEl = document.getElementById('chat-status');
     var scroll = document.getElementById('chat-scroll');
     var groundingToggle = document.getElementById('grounding-toggle');
+
+    var outputStatus = document.getElementById('output-status');
+    document.querySelectorAll('.output-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var type = btn.dataset.output;
+            if (!type) return;
+            document.querySelectorAll('.output-btn').forEach(function(b) { b.disabled = true; });
+            outputStatus.textContent = 'generating ' + type + '...';
+            fetch('/api/documents/' + kb + '/' + slug + '/generate-output', {
+                method: 'POST',
+                headers: {'content-type': 'application/json'},
+                body: JSON.stringify({output_type: type}),
+            }).then(function(r) { return r.json().then(function(j) { return {ok: r.ok, body: j}; }); })
+              .then(function(res) {
+                document.querySelectorAll('.output-btn').forEach(function(b) { b.disabled = false; });
+                if (!res.ok) {
+                    outputStatus.textContent = 'failed: ' + (res.body.detail || 'unknown');
+                    return;
+                }
+                outputStatus.textContent = type + ' ready — reloading…';
+                setTimeout(function() { location.reload(); }, 800);
+              })
+              .catch(function(err) {
+                document.querySelectorAll('.output-btn').forEach(function(b) { b.disabled = false; });
+                outputStatus.textContent = 'error: ' + err.message;
+              });
+        });
+    });
 
     if (groundingToggle) {
         groundingToggle.addEventListener('change', function() {

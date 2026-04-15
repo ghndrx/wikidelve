@@ -1366,6 +1366,41 @@ async def api_document_delete(kb_name: str, slug: str):
     return {"status": "deleted", "kb": kb_name, "slug": slug}
 
 
+@app.post("/api/documents/{kb_name}/{slug}/generate-output")
+async def api_document_generate_output(kb_name: str, slug: str, body: dict):
+    """Generate a specific output type from the document's sources.
+
+    Output types (briefing / faq / study-guide / timeline) map to
+    canned system instructions in ``DOC_OUTPUT_PROMPTS``. We reuse
+    ``run_doc_chat_turn`` by wrapping the instruction as a user
+    message, so the proposal / commit workflow stays identical.
+    """
+    from app.agent_prompts import DOC_OUTPUT_PROMPTS
+    from app.documents import get_manifest
+    from app.agent import run_doc_chat_turn
+
+    if not get_manifest(kb_name, slug):
+        raise HTTPException(status_code=404, detail="document not found")
+
+    output_type = (body.get("output_type") or "").strip()
+    if output_type not in DOC_OUTPUT_PROMPTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"output_type must be one of {sorted(DOC_OUTPUT_PROMPTS)}",
+        )
+
+    instruction = (
+        f"Generate a '{output_type}' output from the current sources. "
+        f"Replace the document body with this new output.\n\n"
+        + DOC_OUTPUT_PROMPTS[output_type]
+    )
+    result = await run_doc_chat_turn(kb_name, slug, instruction)
+    return {
+        "kb": kb_name, "slug": slug, "output_type": output_type,
+        **result,
+    }
+
+
 @app.patch("/api/documents/{kb_name}/{slug}/settings")
 async def api_document_settings(kb_name: str, slug: str, body: dict):
     """Toggle per-document knobs (autonomy_mode, grounding_mode).

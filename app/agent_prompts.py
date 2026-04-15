@@ -346,6 +346,38 @@ commit your change depending on the document's autonomy mode.
 """
 
 
+DOC_OUTPUT_PROMPTS = {
+    "briefing": """\
+Write a one-page briefing document from the current source material.
+Structure: TL;DR (3 bullets) → Key findings (3-5 headed sections of
+2-3 sentences each) → Open questions → Sources.
+Tone: crisp, executive-ready, no marketing fluff. 400-600 words.
+Every factual claim MUST cite [ref:kb/slug] to the seed articles.
+""",
+    "faq": """\
+Turn the current source material into an FAQ (8-15 Q&A pairs).
+Questions should be the ones a new reader would actually ask, in
+order of importance. Answers: 1-3 sentences each, always with
+[ref:kb/slug] citations. Cover both "what" and "why". Group into
+sections with ## headers (Basics, Deep dive, Edge cases).
+""",
+    "study-guide": """\
+Produce a study guide from the sources. Structure: Learning
+objectives (5-8 bullets) → Key concepts (short definitions with
+citations) → Worked examples → Review questions (without answers)
+→ Further reading. Aim for an intermediate learner. 600-1000 words.
+""",
+    "timeline": """\
+Extract a chronological timeline from the sources. Format: a ##
+year header per year (or decade if sources span widely), bullets
+under each listing what happened, with [ref:kb/slug] citations.
+Lead with a 2-3 sentence framing paragraph. End with "Ongoing" for
+present-tense developments. If sources lack dates, say so; do not
+invent them.
+""",
+}
+
+
 SCAFFOLD_EXTEND_PROMPT = """\
 You are WikiDelve's scaffold extension agent. Your ONE job: add
 ONE file to an existing scaffold, matching its design tokens
