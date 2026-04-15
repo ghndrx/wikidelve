@@ -46,6 +46,10 @@
                     <strong style="font-size: 13px;">Design tokens</strong>
                     <button id="token-reset" class="wiki-btn" style="font-size: 11px; padding: 2px 8px;">Reset</button>
                 </div>
+                <div style="display: flex; gap: 6px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--color-border);">
+                    <button id="edit-toggle" class="wiki-btn" style="font-size: 11px; padding: 3px 8px;" title="Turn on edit mode — click text in the preview to change it, then Save to persist via kimi">✏️ Edit content</button>
+                    <span id="edit-status" style="font-size: 11px; color: var(--color-text-muted); align-self: center;"></span>
+                </div>
                 <div id="token-editor-body" style="font-size: 12px; color: var(--color-text-muted);">
                     Parsing styles.css…
                 </div>
@@ -145,6 +149,67 @@
 
     // Copy button: pulls the already-loaded content, falls back to
     // fetch if the user hasn't expanded that file yet.
+    // Edit-in-place: toggle button sends messages into the sandbox
+    // shim which flips relevant text elements to contenteditable. On
+    // Save the shim posts {edits:[{original,updated}]} back up; we
+    // forward to the backend which runs a targeted kimi turn.
+    var editToggle = document.getElementById('edit-toggle');
+    var editStatus = document.getElementById('edit-status');
+    var editing = false;
+
+    function setEditUI(on) {
+        editing = on;
+        if (editToggle) editToggle.textContent = on ? '💾 Save edits' : '✏️ Edit content';
+        if (editStatus) editStatus.textContent = on ? 'click any text, then Save' : '';
+    }
+
+    if (editToggle) {
+        editToggle.addEventListener('click', function() {
+            var frame = document.getElementById('scaffold-preview-iframe');
+            if (!frame || !frame.contentWindow) return;
+            if (!editing) {
+                frame.contentWindow.postMessage({type: 'wd:edit-on'}, '*');
+                setEditUI(true);
+            } else {
+                frame.contentWindow.postMessage({type: 'wd:edit-off', commit: true}, '*');
+                editToggle.disabled = true;
+                editStatus.textContent = 'capturing edits…';
+            }
+        });
+    }
+
+    window.addEventListener('message', function(ev) {
+        var d = ev.data || {};
+        if (d.type !== 'wd:edits') return;
+        var edits = d.edits || [];
+        if (!edits.length) {
+            editStatus.textContent = 'no changes';
+            if (editToggle) editToggle.disabled = false;
+            setEditUI(false);
+            return;
+        }
+        editStatus.textContent = 'applying ' + edits.length + ' edit(s) via kimi…';
+        fetch('/api/scaffolds/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/apply-text-edits', {
+            method: 'POST',
+            headers: {'content-type': 'application/json'},
+            body: JSON.stringify({edits: edits}),
+        }).then(function(r) { return r.json().then(function(j) { return {ok: r.ok, body: j}; }); })
+          .then(function(res) {
+            if (editToggle) editToggle.disabled = false;
+            setEditUI(false);
+            if (!res.ok) {
+                editStatus.textContent = 'apply failed: ' + (res.body.detail || 'unknown');
+                return;
+            }
+            editStatus.textContent = 'applied ' + res.body.applied + ' edit(s)';
+            // Iframe will reload automatically via SSE when storage updates.
+          }).catch(function(err) {
+            if (editToggle) editToggle.disabled = false;
+            setEditUI(false);
+            editStatus.textContent = 'error: ' + err.message;
+          });
+    });
+
     // Hot reload: listen for manifest changes via SSE and reload the
     // iframe + re-parse tokens whenever storage updates. Lets the user
     // watch the agent fan out extension pages in real time.

@@ -89,6 +89,71 @@
     {{ article.html | default('', true) | safe }}
 </div>
 
+{# Mind map: article-scoped neighborhood from the KG #}
+<details id="mindmap-details" style="margin-top: 24px; border: 1px solid var(--color-border); border-radius: 6px;">
+    <summary style="padding: 10px 14px; cursor: pointer; font-weight: 600;">Mind map</summary>
+    <div id="mindmap-svg-wrap" style="padding: 8px 14px 14px;">
+        <svg id="mindmap-svg" width="100%" height="360" style="background: var(--color-surface-alt); border-radius: 4px; display: block;"></svg>
+        <div id="mindmap-status" style="font-size: 11px; color: var(--color-text-muted); margin-top: 4px;"></div>
+    </div>
+</details>
+<script nonce="{{ csp_nonce() }}" src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    var det = document.getElementById('mindmap-details');
+    if (!det) return;
+    var loaded = false;
+    det.addEventListener('toggle', function() {
+        if (!det.open || loaded) return;
+        loaded = true;
+        var kb = {{ article.kb | tojson }};
+        var slug = {{ article.slug | tojson }};
+        var status = document.getElementById('mindmap-status');
+        var svgEl = document.getElementById('mindmap-svg');
+        status.textContent = 'Loading graph…';
+        fetch('/api/articles/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/mindmap')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!window.d3) { status.textContent = 'D3 failed to load'; return; }
+                if (!data.nodes || data.nodes.length <= 1) {
+                    status.textContent = 'No graph neighbors yet.';
+                    return;
+                }
+                status.textContent = data.nodes.length + ' nodes, ' + data.links.length + ' edges';
+                var rect = svgEl.getBoundingClientRect();
+                var w = rect.width || 600, h = 360;
+                var svg = d3.select(svgEl).attr('viewBox', '0 0 ' + w + ' ' + h);
+                svg.selectAll('*').remove();
+                var sim = d3.forceSimulation(data.nodes)
+                    .force('link', d3.forceLink(data.links).id(function(d) { return d.id; }).distance(function(d) { return d.distance; }))
+                    .force('charge', d3.forceManyBody().strength(-160))
+                    .force('center', d3.forceCenter(w/2, h/2))
+                    .force('collide', d3.forceCollide(22));
+                var link = svg.append('g').attr('stroke', 'var(--color-border)').attr('stroke-opacity', 0.6)
+                    .selectAll('line').data(data.links).enter().append('line').attr('stroke-width', 1.2);
+                var g = svg.append('g').selectAll('g').data(data.nodes).enter().append('g').style('cursor', 'pointer');
+                g.append('circle')
+                    .attr('r', function(d) { return d.hop === 0 ? 10 : Math.max(4, 8 - d.hop); })
+                    .attr('fill', function(d) { return d.hop === 0 ? 'var(--color-primary)' : (d.hop === 1 ? 'var(--color-accent)' : 'var(--color-text-muted)'); });
+                g.append('text')
+                    .text(function(d) { return (d.title || d.slug).slice(0, 30); })
+                    .attr('x', 12).attr('y', 4).attr('font-size', 11).attr('fill', 'var(--color-text)');
+                g.append('title').text(function(d) { return d.title + ' (' + d.kb + '/' + d.slug + ')'; });
+                g.on('click', function(ev, d) { if (d.hop > 0) location.href = '/wiki/' + d.kb + '/' + d.slug; });
+                sim.on('tick', function() {
+                    link
+                        .attr('x1', function(d) { return d.source.x; })
+                        .attr('y1', function(d) { return d.source.y; })
+                        .attr('x2', function(d) { return d.target.x; })
+                        .attr('y2', function(d) { return d.target.y; });
+                    g.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
+                });
+            })
+            .catch(function(err) { status.textContent = 'Failed: ' + err.message; });
+    });
+})();
+</script>
+
 {# "You might also research" panel #}
 <h2 class="section-heading" id="suggestions">You might also research</h2>
 <div id="suggestions-panel" style="font-size: 13px; color: var(--color-text-muted);">

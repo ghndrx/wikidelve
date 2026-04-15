@@ -1101,6 +1101,12 @@ _SCAFFOLD_MIMES = {
     "svg": "image/svg+xml",
     "txt": "text/plain; charset=utf-8",
     "md": "text/markdown; charset=utf-8",
+    "webmanifest": "application/manifest+json; charset=utf-8",
+    "ico": "image/x-icon",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
 }
 
 
@@ -1144,6 +1150,29 @@ async def view_scaffold_file(kb_name: str, slug: str, rel_path: str):
     if ext == "html":
         shim = (
             "<script>(function(){"
+            "var EDITABLE='h1,h2,h3,h4,h5,h6,p,li,span,a,button,strong,em,blockquote,td,th';"
+            "var origs=new WeakMap();"
+            "function enterEdit(){"
+            "document.querySelectorAll(EDITABLE).forEach(function(el){"
+            "if(el.children.length===0&&el.textContent.trim()){"
+            "origs.set(el,el.textContent);"
+            "el.contentEditable='true';"
+            "el.style.outline='1px dashed rgba(80,120,255,0.5)';"
+            "}});}"
+            "function exitEdit(commit){"
+            "var edits=[];"
+            "document.querySelectorAll(EDITABLE).forEach(function(el){"
+            "if(el.contentEditable==='true'){"
+            "var before=origs.get(el);"
+            "var after=el.textContent;"
+            "if(commit&&before!==undefined&&before!==after){"
+            "edits.push({original:before,updated:after});"
+            "}"
+            "el.contentEditable='false';"
+            "el.style.outline='';"
+            "}});"
+            "window.parent&&window.parent.postMessage({type:'wd:edits',edits:edits},'*');"
+            "}"
             "window.addEventListener('message',function(e){"
             "var d=e.data||{};"
             "if(d.type==='wd:token-override'&&d.tokens){"
@@ -1153,6 +1182,8 @@ async def view_scaffold_file(kb_name: str, slug: str, rel_path: str):
             "}else if(d.type==='wd:token-reset'){"
             "var r=document.documentElement;"
             "(d.keys||[]).forEach(function(k){r.style.removeProperty('--'+k);});"
+            "}else if(d.type==='wd:edit-on'){enterEdit();"
+            "}else if(d.type==='wd:edit-off'){exitEdit(!!d.commit);"
             "}});"
             "window.parent&&window.parent.postMessage({type:'wd:ready',path:"
             + json.dumps(rel_path) + "},'*');"
@@ -1185,6 +1216,92 @@ async def view_scaffold_file(kb_name: str, slug: str, rel_path: str):
         "Referrer-Policy": "no-referrer",
     }
     return Response(content, media_type=mime, headers=headers)
+
+
+@app.post("/api/scaffolds/{kb_name}/{slug}/apply-text-edits")
+async def api_scaffold_apply_text_edits(kb_name: str, slug: str, body: dict):
+    """Apply a list of ``{original, updated}`` text edits captured from
+    the viewer's edit-in-place overlay.
+
+    We don't do naïve string replacement — an agent-generated scaffold
+    often has the same phrase in multiple files, and contextless
+    replace can stomp unrelated content. Instead we enqueue a kimi
+    extension run that edits the file(s) thoughtfully.
+    """
+    from app.scaffolds import get_manifest, get_file, list_scaffolds
+    from app import kimi_bridge
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="scaffold not found")
+
+    edits = body.get("edits") or []
+    if not isinstance(edits, list) or not edits:
+        raise HTTPException(status_code=400, detail="edits list required")
+    # Cap to avoid flooding the agent with 500 phrase-level tweaks.
+    edits = [e for e in edits if isinstance(e, dict) and e.get("original") and e.get("updated")][:40]
+    if not edits:
+        return {"status": "noop", "applied": 0}
+
+    # Stage the scaffold into a tempdir the bridge can access, run a
+    # focused kimi turn telling it to apply the edits, then ingest the
+    # modified files back.
+    host_dir, container_dir = kimi_bridge.make_workdir(prefix=f"edit-{slug}")
+    try:
+        for rel in manifest.get("files") or []:
+            content = get_file(kb_name, slug, rel)
+            if content is None:
+                continue
+            fp = host_dir / rel
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp.write_text(content, encoding="utf-8")
+
+        edits_lines = "\n".join(
+            f"{i+1}. Replace exactly:\n   OLD: {e['original']!r}\n   NEW: {e['updated']!r}"
+            for i, e in enumerate(edits)
+        )
+        prompt = (
+            f"Apply the following text edits to the scaffold in {container_dir}.\n"
+            f"Each edit is a text phrase the user rewrote in-place. Find each "
+            f"phrase in the appropriate file (usually index.html or another "
+            f".html page) and replace ONLY that phrase. Preserve all "
+            f"surrounding markup, attributes, whitespace, and tags. Do NOT "
+            f"modify styles.css or app.js unless the edit specifically "
+            f"targets a string literal there.\n\n"
+            f"Edits:\n{edits_lines}\n\n"
+            f"After applying, stop. No validation needed."
+        )
+        try:
+            result = await kimi_bridge.run_agent(
+                prompt=prompt, workdir_container=container_dir,
+                timeout_ms=600_000,  # 10 min cap for a targeted edit
+            )
+        except kimi_bridge.KimiBridgeError as exc:
+            raise HTTPException(status_code=502, detail=f"kimi-bridge: {exc}")
+
+        # Re-ingest modified files overwriting the existing scaffold ones.
+        updated = kimi_bridge.walk_workdir(host_dir)
+        from app import storage
+        import json as _json
+        manifest = get_manifest(kb_name, slug)  # fresh read
+        current_files = set(manifest.get("files") or [])
+        for f in updated:
+            if f["path"] in current_files:
+                storage.write_text(
+                    kb_name, f"scaffolds/{slug}/files/{f['path']}", f["content"],
+                )
+        from app.scaffolds import _now_iso_date
+        manifest["updated"] = _now_iso_date()
+        storage.write_text(
+            kb_name, f"scaffolds/{slug}/manifest.json",
+            _json.dumps(manifest, indent=2, sort_keys=True),
+        )
+        return {
+            "status": "applied", "applied": len(edits),
+            "bridge_status": result.get("status"),
+            "steps": result.get("steps"),
+        }
+    finally:
+        kimi_bridge.cleanup_workdir(host_dir)
 
 
 @app.get("/api/scaffolds/{kb_name}/{slug}/events")
@@ -1348,6 +1465,65 @@ async def api_document_pending(kb_name: str, slug: str):
     return {"pending": pending}
 
 
+@app.get("/api/documents/{kb_name}/{slug}/pending-diff")
+async def api_document_pending_diff(kb_name: str, slug: str):
+    """Return a line-level diff of the pending draft against the
+    current committed version. Lets the UI render hunks rather than a
+    full re-read of both blobs."""
+    import difflib
+    from app.documents import (
+        get_pending_draft, get_manifest, get_markdown,
+    )
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="document not found")
+    pending = get_pending_draft(kb_name, slug)
+    if not pending:
+        return {"pending": None, "hunks": []}
+
+    current_v = manifest.get("current_version", 0)
+    prior = get_markdown(kb_name, slug, current_v) if current_v > 0 else ""
+    prior_lines = (prior or "").splitlines(keepends=False)
+    new_lines = (pending.get("markdown") or "").splitlines(keepends=False)
+
+    # Build hunks from unified_diff with context=3.
+    raw = list(difflib.unified_diff(
+        prior_lines, new_lines,
+        fromfile=f"v{current_v}", tofile="pending",
+        lineterm="", n=3,
+    ))
+    hunks: list[dict] = []
+    current: dict | None = None
+    for line in raw:
+        if line.startswith("---") or line.startswith("+++"):
+            continue
+        if line.startswith("@@"):
+            if current is not None:
+                hunks.append(current)
+            current = {"header": line, "lines": []}
+            continue
+        if current is None:
+            continue
+        if line.startswith("+"):
+            kind = "add"
+        elif line.startswith("-"):
+            kind = "del"
+        else:
+            kind = "ctx"
+        current["lines"].append({"kind": kind, "text": line[1:] if line else ""})
+    if current is not None:
+        hunks.append(current)
+
+    return {
+        "pending": {
+            "summary": pending.get("summary", ""),
+            "size_bytes": len(pending.get("markdown") or ""),
+        },
+        "prior_version": current_v,
+        "hunks": hunks,
+    }
+
+
 @app.post("/api/documents/{kb_name}/{slug}/commit")
 async def api_document_commit(kb_name: str, slug: str):
     """Promote the pending agent draft to v+1 (renders PDF inline)."""
@@ -1396,6 +1572,21 @@ async def api_document_export(kb_name: str, slug: str, v: int = 0):
         rendered, media_type=mime,
         headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
     )
+
+
+@app.post("/api/documents/{kb_name}/{slug}/fork")
+async def api_document_fork(kb_name: str, slug: str, body: dict = None):
+    from app.documents import fork_document, get_manifest
+    if not get_manifest(kb_name, slug):
+        raise HTTPException(status_code=404, detail="document not found")
+    title = None
+    if isinstance(body, dict):
+        title = (body.get("title") or "").strip() or None
+    try:
+        new_slug = fork_document(kb_name, slug, new_title=title)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"kb": kb_name, "slug": new_slug, "parent_slug": slug}
 
 
 @app.delete("/api/documents/{kb_name}/{slug}")
@@ -1580,6 +1771,46 @@ async def api_graph_related(kb: str, slug: str, depth: int = 2):
     """Find articles related to a given article via knowledge graph traversal."""
     related = await get_related_by_graph(slug, kb, depth=min(depth, 3))
     return {"slug": slug, "kb": kb, "related": related}
+
+
+@app.get("/api/articles/{kb_name}/{slug}/mindmap")
+async def api_article_mindmap(kb_name: str, slug: str, depth: int = 2):
+    """Return a {nodes, links} payload for D3 force-directed viz.
+
+    The center node is the article itself; neighbors are articles
+    found via ``get_related_by_graph`` up to ``depth`` hops away.
+    Links encode hop distance as the ``distance`` numeric so D3 can
+    weight forces accordingly.
+    """
+    from app.wiki import get_article
+    article = get_article(kb_name, slug)
+    if not article:
+        raise HTTPException(status_code=404, detail="article not found")
+    related = await get_related_by_graph(slug, kb_name, depth=min(max(depth, 1), 3))
+    nodes = [{
+        "id": f"{kb_name}/{slug}", "slug": slug, "kb": kb_name,
+        "title": article.get("title", slug), "hop": 0, "score": 0,
+    }]
+    links = []
+    seen = {f"{kb_name}/{slug}"}
+    for r in related[:40]:
+        rslug = r.get("slug"); rkb = r.get("kb") or kb_name
+        if not rslug:
+            continue
+        rid = f"{rkb}/{rslug}"
+        if rid in seen:
+            continue
+        seen.add(rid)
+        nodes.append({
+            "id": rid, "slug": rslug, "kb": rkb,
+            "title": r.get("title") or rslug.replace("-", " ").title(),
+            "hop": r.get("hop", 1), "score": r.get("score", 0),
+        })
+        links.append({
+            "source": f"{kb_name}/{slug}", "target": rid,
+            "distance": 50 + 40 * max(0, r.get("hop", 1) - 1),
+        })
+    return {"nodes": nodes, "links": links}
 
 
 @app.post("/api/quality/auto-enrich")

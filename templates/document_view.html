@@ -120,8 +120,14 @@
         <h1 style="margin: 4px 0 0 0;">{{ manifest.title }}</h1>
         <p style="color: var(--color-text-secondary); margin: 4px 0 0 0; font-size: 14px;">{{ manifest.brief }}</p>
     </div>
-    <div style="font-size: 13px; color: var(--color-text-muted); white-space: nowrap;">
-        v{{ manifest.current_version }} · updated {{ manifest.updated }}
+    <div style="font-size: 13px; color: var(--color-text-muted); white-space: nowrap; display: flex; gap: 10px; align-items: center;">
+        {% if manifest.parent_slug %}
+        <a href="/documents/{{ kb }}/{{ manifest.parent_slug }}" style="font-size: 11px; padding: 2px 8px; background: var(--color-surface-alt); border-radius: 3px; color: inherit;" title="Forked from {{ manifest.parent_slug }}@v{{ manifest.parent_version }}">
+            ⎇ from {{ manifest.parent_slug }}
+        </a>
+        {% endif %}
+        <span>v{{ manifest.current_version }} · updated {{ manifest.updated }}</span>
+        <button id="fork-btn" class="wiki-btn" style="font-size: 11px; padding: 2px 8px;" title="Fork this document into a new slug so you can explore alternate drafts without losing the original">⎇ Fork</button>
     </div>
 </header>
 
@@ -210,6 +216,32 @@
     var scroll = document.getElementById('chat-scroll');
     var groundingToggle = document.getElementById('grounding-toggle');
 
+    var forkBtn = document.getElementById('fork-btn');
+    if (forkBtn) {
+        forkBtn.addEventListener('click', function() {
+            forkBtn.disabled = true;
+            forkBtn.textContent = 'forking…';
+            fetch('/api/documents/' + kb + '/' + slug + '/fork', {
+                method: 'POST',
+                headers: {'content-type': 'application/json'},
+                body: JSON.stringify({}),
+            }).then(function(r) { return r.json().then(function(j) { return {ok: r.ok, body: j}; }); })
+              .then(function(res) {
+                if (!res.ok) {
+                    forkBtn.disabled = false;
+                    forkBtn.textContent = '⎇ Fork';
+                    alert('Fork failed: ' + (res.body.detail || 'unknown'));
+                    return;
+                }
+                location.href = '/documents/' + kb + '/' + res.body.slug;
+              }).catch(function(err) {
+                forkBtn.disabled = false;
+                forkBtn.textContent = '⎇ Fork';
+                alert('Fork error: ' + err.message);
+              });
+        });
+    }
+
     var outputStatus = document.getElementById('output-status');
     document.querySelectorAll('.output-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -284,6 +316,11 @@
         body.textContent = content;
         div.appendChild(body);
         if (opts.pending) {
+            var diffWrap = document.createElement('div');
+            diffWrap.className = 'diff-wrap';
+            diffWrap.style.cssText = 'margin-top:8px;border:1px solid var(--color-border);border-radius:4px;background:var(--color-surface-alt);font-family:var(--font-mono);font-size:11px;max-height:320px;overflow:auto;';
+            diffWrap.textContent = 'Loading diff…';
+            div.appendChild(diffWrap);
             var actions = document.createElement('div');
             actions.className = 'diff-actions';
             var commit = document.createElement('button');
@@ -295,8 +332,45 @@
             actions.appendChild(commit);
             actions.appendChild(discard);
             div.appendChild(actions);
+            // Populate the hunk view after the bubble lands in the DOM.
+            setTimeout(function() { loadDiffInto(diffWrap); }, 0);
         }
         return div;
+    }
+
+    // Fetch + render the pending-diff hunks into a container.
+    async function loadDiffInto(container) {
+        try {
+            var r = await fetch('/api/documents/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/pending-diff', {cache: 'no-store'});
+            if (!r.ok) { container.textContent = 'Diff unavailable'; return; }
+            var data = await r.json();
+            container.textContent = '';
+            if (!data.hunks || !data.hunks.length) {
+                container.textContent = 'No structural change (whitespace-only?)';
+                return;
+            }
+            var header = document.createElement('div');
+            header.textContent = 'Diff against v' + data.prior_version + (data.pending && data.pending.summary ? '  —  ' + data.pending.summary : '');
+            header.style.cssText = 'padding:6px 10px;background:var(--color-surface);border-bottom:1px solid var(--color-border);font-size:10px;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.05em;';
+            container.appendChild(header);
+            data.hunks.forEach(function(h) {
+                var hdr = document.createElement('div');
+                hdr.textContent = h.header;
+                hdr.style.cssText = 'padding:3px 10px;background:var(--color-surface);color:var(--color-text-muted);font-size:10px;';
+                container.appendChild(hdr);
+                h.lines.forEach(function(line) {
+                    var row = document.createElement('div');
+                    row.textContent = (line.kind === 'add' ? '+ ' : line.kind === 'del' ? '- ' : '  ') + line.text;
+                    var bg = line.kind === 'add' ? 'rgba(40,167,69,0.14)'
+                           : line.kind === 'del' ? 'rgba(220,53,69,0.14)'
+                           : 'transparent';
+                    row.style.cssText = 'padding:1px 10px;background:' + bg + ';white-space:pre-wrap;word-break:break-word;';
+                    container.appendChild(row);
+                });
+            });
+        } catch (e) {
+            container.textContent = 'Diff error: ' + e.message;
+        }
     }
 
     function appendBubble(role, content, opts) {

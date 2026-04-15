@@ -508,6 +508,59 @@ def add_pinned_fact(kb: str, slug: str, fact: str) -> bool:
     return True
 
 
+def fork_document(kb: str, slug: str, new_title: Optional[str] = None) -> str:
+    """Copy a document to a new slug, preserving its current version as
+    v1 of the fork. The fork's manifest records its ``parent_slug`` and
+    ``parent_version`` so the UI can show lineage.
+
+    The new doc starts at current_version=1 (a single snapshot of the
+    source's committed content) — earlier version history does NOT copy
+    over; users who want that can just view the parent. Chat history
+    does not copy either, matching git-fork semantics.
+    """
+    src = get_manifest(kb, slug)
+    if not src:
+        raise ValueError(f"source document not found: {kb}/{slug}")
+
+    title = new_title or f"{src.get('title', slug)} (fork)"
+    # Reuse create_document to get a fresh slug allocation + validation
+    # pass — we'll overwrite manifest fields after to carry forward the
+    # forked state. Seeds / pinned facts / grounding / autonomy all
+    # inherit so the fork behaves like its parent out of the box.
+    new_slug = create_document(
+        kb=kb, title=title, brief=src.get("brief", ""),
+        doc_type=src.get("doc_type", "pdf"),
+        autonomy_mode=src.get("autonomy_mode", DEFAULT_AUTONOMY),
+        seed_articles=src.get("seed_articles") or [],
+        pinned_facts=src.get("pinned_facts") or [],
+    )
+
+    # If the source has committed content, copy the head version as v1
+    # of the fork. Leave the fork empty otherwise.
+    current_v = int(src.get("current_version") or 0)
+    if current_v > 0:
+        head_md = get_markdown(kb, slug, current_v) or ""
+        if head_md:
+            # Render-less commit: the renderer can regenerate on demand.
+            commit_version(
+                kb, new_slug, head_md, rendered=None,
+                trigger=f"forked from {slug}@v{current_v}",
+                agent_notes=f"fork of {slug}",
+            )
+
+    # Stamp lineage on the fork's manifest.
+    manifest = get_manifest(kb, new_slug) or {}
+    manifest["parent_slug"] = slug
+    manifest["parent_version"] = current_v
+    manifest["grounding_mode"] = src.get("grounding_mode", DEFAULT_GROUNDING)
+    storage.write_text(
+        kb, f"documents/{new_slug}/manifest.json",
+        json.dumps(manifest, indent=2, sort_keys=True),
+    )
+    logger.info("Forked %s/%s@v%d → %s/%s", kb, slug, current_v, kb, new_slug)
+    return new_slug
+
+
 def delete_document(kb: str, slug: str) -> None:
     manifest = get_manifest(kb, slug)
     if manifest:
