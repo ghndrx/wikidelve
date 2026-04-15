@@ -643,7 +643,11 @@ async def run_scaffold_agent_kimi(
         "index.html" if "index.html" in paths
         else next((p for p in paths if p.endswith(".html")), paths[0])
     )
+    # _validate_manifest slugifies from `title`, falling back to the
+    # literal string "scaffold" when missing — which collapses every
+    # kimi run into the same slug. Always set a title.
     manifest = {
+        "title": topic[:200],
         "topic": topic,
         "scaffold_type": scaffold_type,
         "framework": "vanilla",
