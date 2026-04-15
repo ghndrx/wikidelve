@@ -162,19 +162,28 @@
 <div class="doc-layout">
     <!-- LEFT RAIL: Sources (seed articles + pinned facts) -->
     <div class="doc-pane">
-        <div class="rail-section-head">Sources</div>
+        <div class="rail-section-head" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Sources</span>
+            <button id="add-source-btn" class="wiki-btn" style="font-size: 10px; padding: 2px 6px; text-transform: none; letter-spacing: 0;">+ Add</button>
+        </div>
         <div class="doc-pane-body">
-            {% if manifest.seed_articles %}
-            {% for src in manifest.seed_articles %}
-            <a class="source-item" href="/wiki/{{ src.kb }}/{{ src.slug }}" target="_blank" rel="noopener" title="{{ src.kb }}/{{ src.slug }}">
-                📄 {{ src.title or src.slug }}
-            </a>
-            {% endfor %}
-            {% else %}
-            <div style="padding: 16px; font-size: 12px; color: var(--color-text-muted);">
-                No seed articles linked.
+            <div id="sources-list">
+                {% if manifest.seed_articles %}
+                {% for src in manifest.seed_articles %}
+                <div class="source-item" style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+                    <a href="/wiki/{{ src.kb }}/{{ src.slug }}" target="_blank" rel="noopener" title="{{ src.kb }}/{{ src.slug }}" style="flex: 1; color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        📄 {{ src.title or src.slug }}
+                    </a>
+                    <button class="source-remove-btn wiki-btn" data-kb="{{ src.kb }}" data-slug="{{ src.slug }}" style="font-size: 10px; padding: 1px 5px; opacity: 0.5;" title="Remove">×</button>
+                </div>
+                {% endfor %}
+                {% else %}
+                <div style="padding: 16px 12px; font-size: 12px; color: var(--color-text-muted); text-align: center;">
+                    <p style="margin: 0 0 8px;">No sources yet.</p>
+                    <button id="suggest-sources-btn" class="wiki-btn" style="font-size: 11px;">✨ Suggest from brief</button>
+                </div>
+                {% endif %}
             </div>
-            {% endif %}
             <div class="rail-section-head" style="margin-top: 8px;">Pinned facts</div>
             {% if manifest.pinned_facts %}
             {% for f in manifest.pinned_facts %}
@@ -182,9 +191,21 @@
             {% endfor %}
             {% else %}
             <div style="padding: 12px; font-size: 12px; color: var(--color-text-muted);">
-                None yet. The agent adds these via chat.
+                Ask the agent to pin a fact via chat.
             </div>
             {% endif %}
+        </div>
+    </div>
+
+    {# Search modal for adding sources from the KB. Hidden until triggered. #}
+    <div id="source-search-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: flex-start; justify-content: center; padding-top: 80px;">
+        <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 12px; padding: 20px; width: 90%; max-width: 560px; box-shadow: 0 10px 40px rgba(0,0,0,0.2);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h3 style="margin: 0; font-size: 15px;">Add source from KB</h3>
+                <button id="source-search-close" class="wiki-btn" style="font-size: 12px;">Close</button>
+            </div>
+            <input id="source-search-input" type="search" placeholder="Search articles in your KB…" style="width: 100%; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); color: var(--color-text); font-size: 14px;" />
+            <div id="source-search-results" style="margin-top: 12px; max-height: 400px; overflow-y: auto; font-size: 13px;"></div>
         </div>
     </div>
 
@@ -209,9 +230,18 @@
                 {{ evt.content }}
             </div>
             {% else %}
-            <div style="padding: 24px; text-align: center; color: var(--color-text-muted); font-size: 13px;">
-                Start the conversation. Try: "Draft v1 from the brief" or
-                "Pull from kb article X and write a one-pager."
+            <div style="padding: 32px 24px; text-align: center; color: var(--color-text-muted); font-size: 13px; display: flex; flex-direction: column; align-items: center; gap: 16px;">
+                <div style="font-size: 36px; line-height: 1;">💬</div>
+                <div>
+                    <div style="font-size: 15px; color: var(--color-text); margin-bottom: 4px;">Ready when you are</div>
+                    <div>This notebook has {{ manifest.seed_articles|length }} source{% if manifest.seed_articles|length != 1 %}s{% endif %} attached. Pick a quick-start below or type your own.</div>
+                </div>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 480px;">
+                    <button type="button" class="starter-btn wiki-btn" data-send="Draft v1 of this document now, using the attached sources.">📝 Draft v1 now</button>
+                    <button type="button" class="starter-btn wiki-btn" data-send="Summarize the key findings across the attached sources in 5 bullets.">📋 Key findings</button>
+                    <button type="button" class="starter-btn wiki-btn" data-send="What are the open questions or gaps the sources don't answer?">❓ Open questions</button>
+                    <button type="button" class="starter-btn wiki-btn" data-send="What would an executive need to know about this topic in one paragraph?">🎯 One-paragraph exec</button>
+                </div>
             </div>
             {% endfor %}
         </div>
@@ -294,6 +324,126 @@
                 forkBtn.textContent = '⎇ Fork';
                 alert('Fork error: ' + err.message);
               });
+        });
+    }
+
+    // Starter quick-send buttons (empty-state chat).
+    document.querySelectorAll('.starter-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            input.value = btn.dataset.send;
+            sendTurn();
+        });
+    });
+
+    // Source management: search modal, add, remove, suggest.
+    var modal = document.getElementById('source-search-modal');
+    var searchInput = document.getElementById('source-search-input');
+    var results = document.getElementById('source-search-results');
+    var searchDebounce = null;
+
+    function openSourceModal() {
+        if (!modal) return;
+        modal.style.display = 'flex';
+        searchInput.value = '';
+        results.textContent = 'Type to search your KB.';
+        setTimeout(function() { searchInput.focus(); }, 30);
+    }
+    function closeSourceModal() { if (modal) modal.style.display = 'none'; }
+
+    var addBtn = document.getElementById('add-source-btn');
+    if (addBtn) addBtn.addEventListener('click', openSourceModal);
+    var closeBtn = document.getElementById('source-search-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeSourceModal);
+    if (modal) modal.addEventListener('click', function(e) { if (e.target === modal) closeSourceModal(); });
+
+    function renderResults(items) {
+        results.textContent = '';
+        if (!items || !items.length) {
+            results.textContent = 'No matches.';
+            return;
+        }
+        items.slice(0, 20).forEach(function(r) {
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border:1px solid var(--color-border);border-radius:6px;margin-bottom:4px;';
+            var left = document.createElement('div');
+            left.style.cssText = 'flex:1;overflow:hidden;';
+            var title = document.createElement('div');
+            title.style.cssText = 'font-size:13px;color:var(--color-text);';
+            title.textContent = r.title || r.slug;
+            var meta = document.createElement('div');
+            meta.style.cssText = 'font-size:11px;color:var(--color-text-muted);';
+            meta.textContent = (r.kb || kb) + ' / ' + r.slug;
+            left.appendChild(title);
+            left.appendChild(meta);
+            var btn = document.createElement('button');
+            btn.className = 'wiki-btn';
+            btn.textContent = 'Add';
+            btn.style.cssText = 'font-size:11px;padding:4px 10px;';
+            btn.addEventListener('click', function() {
+                btn.disabled = true; btn.textContent = 'adding…';
+                fetch('/api/documents/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/sources/add', {
+                    method: 'POST',
+                    headers: {'content-type': 'application/json'},
+                    body: JSON.stringify({kb: r.kb || kb, slug: r.slug, title: r.title || ''}),
+                }).then(function(resp) {
+                    if (resp.ok) { btn.textContent = '✓ Added'; setTimeout(function() { location.reload(); }, 500); }
+                    else { btn.disabled = false; btn.textContent = 'Add'; }
+                });
+            });
+            row.appendChild(left);
+            row.appendChild(btn);
+            results.appendChild(row);
+        });
+    }
+
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            clearTimeout(searchDebounce);
+            var q = searchInput.value.trim();
+            if (q.length < 2) { results.textContent = 'Type to search.'; return; }
+            searchDebounce = setTimeout(function() {
+                fetch('/api/search/hybrid?q=' + encodeURIComponent(q) + '&kb=' + encodeURIComponent(kb) + '&limit=20')
+                    .then(function(r) { return r.ok ? r.json() : []; })
+                    .then(function(data) { renderResults(Array.isArray(data) ? data : (data.results || [])); });
+            }, 200);
+        });
+    }
+
+    // Remove-source buttons on the rail.
+    document.querySelectorAll('.source-remove-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            btn.disabled = true;
+            fetch('/api/documents/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/sources/remove', {
+                method: 'POST',
+                headers: {'content-type': 'application/json'},
+                body: JSON.stringify({kb: btn.dataset.kb, slug: btn.dataset.slug}),
+            }).then(function(r) { if (r.ok) location.reload(); });
+        });
+    });
+
+    // Suggest-from-brief (empty state shortcut).
+    var suggestBtn = document.getElementById('suggest-sources-btn');
+    if (suggestBtn) {
+        suggestBtn.addEventListener('click', function() {
+            suggestBtn.disabled = true;
+            suggestBtn.textContent = 'suggesting…';
+            var brief = {{ (manifest.brief or '')|tojson }};
+            if (!brief) { suggestBtn.textContent = 'no brief'; return; }
+            fetch('/api/search/hybrid?q=' + encodeURIComponent(brief) + '&kb=' + encodeURIComponent(kb) + '&limit=5')
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(data) {
+                    var items = Array.isArray(data) ? data : (data.results || []);
+                    if (!items.length) { suggestBtn.textContent = 'no matches'; return; }
+                    return Promise.all(items.slice(0, 5).map(function(r) {
+                        return fetch('/api/documents/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/sources/add', {
+                            method: 'POST',
+                            headers: {'content-type': 'application/json'},
+                            body: JSON.stringify({kb: r.kb || kb, slug: r.slug, title: r.title || ''}),
+                        });
+                    }));
+                })
+                .then(function() { location.reload(); })
+                .catch(function() { suggestBtn.disabled = false; suggestBtn.textContent = '✨ Suggest from brief'; });
         });
     }
 

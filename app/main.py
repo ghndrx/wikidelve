@@ -1422,11 +1422,28 @@ async def api_document_create(request: Request, kb_name: str):
             detail=f"grounding_mode must be one of {sorted(GROUNDING_MODES)}",
         )
 
+    # Auto-seed: if the caller didn't pass seed_articles, run a
+    # hybrid-search on the brief and attach the top 5 matches. Makes
+    # the Sources panel non-empty out of the box, which is the whole
+    # point of a grounded notebook.
+    seed_articles = body.get("seed_articles")
+    if not seed_articles:
+        try:
+            from app.hybrid_search import hybrid_search
+            hits = await hybrid_search(brief, kb_name=kb_name, limit=5)
+            seed_articles = [
+                {"kb": h.get("kb") or kb_name, "slug": h.get("slug"), "title": h.get("title", "")}
+                for h in (hits or []) if isinstance(h, dict) and h.get("slug")
+            ]
+        except Exception:
+            # Non-fatal — just create the doc with no seeds if search fails.
+            seed_articles = []
+
     try:
         slug = create_document(
             kb_name, title, brief,
             doc_type=doc_type, autonomy_mode=autonomy_mode,
-            seed_articles=body.get("seed_articles"),
+            seed_articles=seed_articles,
             pinned_facts=body.get("pinned_facts"),
         )
     except ValueError as exc:
@@ -1594,6 +1611,58 @@ async def api_document_export(kb_name: str, slug: str, v: int = 0):
         rendered, media_type=mime,
         headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
     )
+
+
+@app.post("/api/documents/{kb_name}/{slug}/sources/add")
+async def api_document_add_source(kb_name: str, slug: str, body: dict):
+    """Append a source (seed article) to a document's manifest.
+
+    Body: ``{kb, slug, title?}``. Idempotent — adding the same
+    (kb,slug) twice is a no-op. The drafting agent picks the new
+    source up on the next chat turn.
+    """
+    import json as _json
+    from app import storage
+    from app.documents import get_manifest
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="document not found")
+    src_slug = str(body.get("slug", "")).strip()
+    src_kb = str(body.get("kb") or kb_name).strip()
+    if not src_slug:
+        raise HTTPException(status_code=400, detail="slug required")
+    title = str(body.get("title") or "").strip()
+
+    seeds = manifest.get("seed_articles") or []
+    if any(s.get("kb") == src_kb and s.get("slug") == src_slug for s in seeds):
+        return {"kb": kb_name, "slug": slug, "already_present": True, "seed_articles": seeds}
+    seeds.append({"kb": src_kb, "slug": src_slug, "title": title or src_slug})
+    manifest["seed_articles"] = seeds
+    storage.write_text(
+        kb_name, f"documents/{slug}/manifest.json",
+        _json.dumps(manifest, indent=2, sort_keys=True),
+    )
+    return {"kb": kb_name, "slug": slug, "seed_articles": seeds}
+
+
+@app.post("/api/documents/{kb_name}/{slug}/sources/remove")
+async def api_document_remove_source(kb_name: str, slug: str, body: dict):
+    import json as _json
+    from app import storage
+    from app.documents import get_manifest
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="document not found")
+    src_slug = str(body.get("slug", "")).strip()
+    src_kb = str(body.get("kb") or kb_name).strip()
+    seeds = [s for s in (manifest.get("seed_articles") or [])
+             if not (s.get("kb") == src_kb and s.get("slug") == src_slug)]
+    manifest["seed_articles"] = seeds
+    storage.write_text(
+        kb_name, f"documents/{slug}/manifest.json",
+        _json.dumps(manifest, indent=2, sort_keys=True),
+    )
+    return {"kb": kb_name, "slug": slug, "seed_articles": seeds}
 
 
 @app.post("/api/documents/{kb_name}/{slug}/fork")
