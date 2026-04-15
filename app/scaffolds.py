@@ -212,6 +212,16 @@ def _validate_manifest(manifest: dict) -> dict:
         raise ValueError("manifest.entrypoint is required")
     entrypoint = _safe_rel_path(entrypoint)
 
+    # Single-file chunking support: the entrypoint is allowed to be
+    # in ``planned_extensions`` rather than ``files`` at create time —
+    # the orchestrator fans out an extension pass that materialises
+    # the entrypoint as its own focused single-file agent run. This
+    # was added because Minimax M2's reasoning loop can't fit even
+    # 3 files of HTML+CSS+JS into one recursion budget; chunking
+    # everything to single-file passes is what makes the pipeline
+    # land reliably. Validation only requires the entrypoint to be
+    # ANNOUNCED somewhere — files OR planned.
+
     # Two-pass support: first-pass agent declares which sibling pages
     # it WANTS to add but didn't emit yet. Each entry is
     # ``{path, brief}`` — path is a sibling .html filename, brief is
@@ -348,12 +358,14 @@ def create_scaffold(
         storage.write_text(kb, f"scaffolds/{slug}/files/{path}", content)
         file_list.append(path)
 
-    # Make sure the entrypoint is actually in the files we wrote —
-    # otherwise the sandbox route will 404 on first render.
-    if canon["entrypoint"] not in file_list:
+    # Entrypoint must be ANNOUNCED — either landed in this call's
+    # files OR declared in planned_extensions for an upcoming pass.
+    # Otherwise the sandbox can't render anything.
+    planned_paths = {e["path"] for e in (canon.get("planned_extensions") or [])}
+    if canon["entrypoint"] not in file_list and canon["entrypoint"] not in planned_paths:
         raise ValueError(
             f"entrypoint {canon['entrypoint']!r} not in written files "
-            f"({file_list})"
+            f"({file_list}) or planned_extensions ({sorted(planned_paths)})"
         )
     canon["files"] = file_list
 
