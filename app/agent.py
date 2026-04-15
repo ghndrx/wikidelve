@@ -13,6 +13,7 @@ The agent uses WikiDelve's existing functions directly (no HTTP sidecar).
 """
 
 import logging
+from typing import Optional
 
 from deepagents import create_deep_agent
 
@@ -37,40 +38,72 @@ logger = logging.getLogger("kb-service.agent")
 # Model resolution
 # ---------------------------------------------------------------------------
 
-def _resolve_model():
+def _resolve_model(purpose: Optional[str] = None):
     """Return a LangChain chat model identifier or instance for the
     agent to drive its loop.
 
-    Minimax is exposed via an OpenAI-compatible endpoint, so we
-    return an instantiated ``ChatOpenAI`` pointed at MINIMAX_BASE —
-    that matches what the rest of the app already uses (app.llm)
-    and keeps the agent on the same quota/budget as synthesis.
+    Per-purpose override: setting e.g. ``SCAFFOLD_AGENT_PROVIDER=kimi``
+    routes scaffold runs through Kimi while keeping everything else
+    on the global ``LLM_PROVIDER``. This lets us pick the right model
+    per task — scaffolds + code-gen → Kimi K2.5 (strong on HTML/CSS
+    + tool use), conversational doc agent → Minimax M2 (cheaper, fine
+    for chat), research agent → whatever LLM_PROVIDER says.
 
-    Bedrock / Anthropic providers return the standard LangChain
-    string form, which create_deep_agent resolves internally.
+    Providers exposed via OpenAI-compatible endpoints (Minimax, Kimi)
+    return an instantiated ``ChatOpenAI`` so the agent loop talks to
+    them through the same wrapper. Bedrock / Anthropic return the
+    standard LangChain string form for create_deep_agent to resolve.
     """
     from app.config import (
         LLM_PROVIDER, BEDROCK_MODEL,
         MINIMAX_API_KEY, MINIMAX_BASE, MINIMAX_MODEL, MINIMAX_TIMEOUT,
+        KIMI_API_KEY, KIMI_BASE, KIMI_MODEL,
     )
+    import os as _os
 
-    provider = (LLM_PROVIDER or "minimax").lower()
+    # Per-agent-purpose override: <PURPOSE>_AGENT_PROVIDER env var
+    # wins over global LLM_PROVIDER. Lets us route scaffolds to Kimi
+    # without disturbing anything else.
+    provider = None
+    if purpose:
+        env_name = f"{purpose.upper()}_AGENT_PROVIDER"
+        provider = (_os.getenv(env_name, "").strip() or None)
+        if provider:
+            logger.info("Agent for purpose=%r using override provider=%r", purpose, provider)
+    if not provider:
+        provider = (LLM_PROVIDER or "minimax").lower()
+    provider = provider.lower()
 
     if provider == "minimax":
         if not MINIMAX_API_KEY:
             raise RuntimeError(
-                "LLM_PROVIDER=minimax but MINIMAX_API_KEY is not set"
+                "Minimax provider selected but MINIMAX_API_KEY is not set"
             )
         from langchain_openai import ChatOpenAI
-        # Minimax exposes /chat/completions in OpenAI format. The
-        # agent loop uses temperature=0.2 (deterministic-ish) and a
-        # generous per-call timeout because synthesis steps run long.
         return ChatOpenAI(
             model=MINIMAX_MODEL,
             base_url=MINIMAX_BASE,
             api_key=MINIMAX_API_KEY,
             temperature=0.2,
             timeout=MINIMAX_TIMEOUT,
+            max_retries=4,
+        )
+
+    if provider == "kimi":
+        if not KIMI_API_KEY:
+            raise RuntimeError(
+                "Kimi provider selected but KIMI_API_KEY is not set"
+            )
+        from langchain_openai import ChatOpenAI
+        # Kimi K2.5 is OpenAI-compatible (Moonshot's endpoint).
+        # Same wrapper, different base URL + model. Strong at code
+        # generation + tool calling — well-suited for scaffolds.
+        return ChatOpenAI(
+            model=KIMI_MODEL,
+            base_url=KIMI_BASE,
+            api_key=KIMI_API_KEY,
+            temperature=0.2,
+            timeout=300,
             max_retries=4,
         )
 
@@ -81,7 +114,7 @@ def _resolve_model():
         return "anthropic:claude-sonnet-4-6"
 
     # Unknown — fail loud rather than silently picking a wrong provider.
-    raise RuntimeError(f"Unsupported LLM_PROVIDER for agent: {provider!r}")
+    raise RuntimeError(f"Unsupported LLM provider for agent: {provider!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +387,7 @@ async def create_scaffold_agent(kb: str, topic: str, scaffold_type: str):
     """
     from app.scaffolds import SCAFFOLD_TYPES
 
-    model = _resolve_model()
+    model = _resolve_model(purpose="scaffold")
     system_prompt = SCAFFOLD_AGENT_PROMPT.format(
         topic=topic, scaffold_type=scaffold_type,
         scaffold_types=", ".join(sorted(SCAFFOLD_TYPES)),
@@ -517,7 +550,7 @@ async def create_scaffold_extend_agent(kb: str, slug: str, page_path: str, brief
     re-researching."""
     from app.agent_tools import get_scaffold_file, add_scaffold_page
 
-    model = _resolve_model()
+    model = _resolve_model(purpose="scaffold")
     system_prompt = SCAFFOLD_EXTEND_PROMPT.format(
         kb=kb, slug=slug, page_path=page_path, page_brief=brief,
     )
