@@ -199,6 +199,48 @@ async def find_related_articles(kb: str, slug: str) -> str:
 
 
 @tool
+async def get_scaffold_file(kb: str, slug: str, rel_path: str) -> str:
+    """Read a single file from an existing scaffold.
+
+    Used by the extension agent to read styles.css / index.html /
+    manifest.json so it can match design tokens and BEM naming
+    when adding sibling pages."""
+    from app.scaffolds import get_file, get_manifest
+    if rel_path == "manifest.json":
+        m = get_manifest(kb, slug)
+        if not m:
+            return json.dumps({"error": f"scaffold not found: {kb}/{slug}"})
+        return json.dumps(m, indent=2)
+    content = get_file(kb, slug, rel_path)
+    if content is None:
+        return json.dumps({"error": f"file not found: {rel_path}"})
+    return content
+
+
+@tool
+async def add_scaffold_page(kb: str, slug: str, path: str, content: str) -> str:
+    """Add ONE sibling page to an existing scaffold.
+
+    Used by the extension agent (second pass). Matches the
+    scaffold's existing design tokens — read styles.css with
+    get_scaffold_file FIRST so you know what tokens exist.
+
+    Removes the matching planned_extensions entry from the
+    manifest on success so the orchestrator's queue stays
+    accurate."""
+    from app.scaffolds import add_page_to_scaffold
+    try:
+        manifest = add_page_to_scaffold(kb, slug, path, content)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({
+        "kb": kb, "slug": slug, "added": path,
+        "files_total": len(manifest.get("files") or []),
+        "planned_remaining": len(manifest.get("planned_extensions") or []),
+    })
+
+
+@tool
 async def write_scaffold_files(kb: str, manifest: dict, files: list) -> str:
     """Write a plug-and-play scaffold (template package) to storage.
 
@@ -354,6 +396,8 @@ ALL_TOOLS = [
     list_articles,
     write_article,
     write_scaffold_files,
+    get_scaffold_file,
+    add_scaffold_page,
     check_article_quality,
     enrich_article,
     add_crosslinks,

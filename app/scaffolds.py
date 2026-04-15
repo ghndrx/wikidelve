@@ -212,6 +212,27 @@ def _validate_manifest(manifest: dict) -> dict:
         raise ValueError("manifest.entrypoint is required")
     entrypoint = _safe_rel_path(entrypoint)
 
+    # Two-pass support: first-pass agent declares which sibling pages
+    # it WANTS to add but didn't emit yet. Each entry is
+    # ``{path, brief}`` — path is a sibling .html filename, brief is
+    # a 1-2 sentence description the extension agent uses as its
+    # single-page assignment. Empty list means "no extensions
+    # needed; this is a complete scaffold".
+    planned = manifest.get("planned_extensions") or []
+    if not isinstance(planned, list):
+        raise ValueError("planned_extensions must be a list")
+    clean_planned: list[dict] = []
+    for entry in planned:
+        if not isinstance(entry, dict):
+            raise ValueError(f"planned_extensions entry must be dict: {entry!r}")
+        path = _safe_rel_path(entry.get("path", ""))
+        brief = (entry.get("brief") or "").strip()[:1000]
+        if not path or not brief:
+            raise ValueError(
+                f"planned_extensions entry needs path + brief: {entry!r}"
+            )
+        clean_planned.append({"path": path, "brief": brief})
+
     today = _now_iso_date()
     return {
         "slug": slug,
@@ -225,9 +246,69 @@ def _validate_manifest(manifest: dict) -> dict:
         "build_cmd": manifest.get("build_cmd") or None,
         "scaffold_version": SCAFFOLD_VERSION,
         "files": list(manifest.get("files") or []),
+        "planned_extensions": clean_planned,
         "created": manifest.get("created") or today,
         "updated": today,
     }
+
+
+def add_page_to_scaffold(
+    kb: str, slug: str, path: str, content: str,
+) -> dict:
+    """Append a single sibling page to an existing scaffold.
+
+    Used by the two-pass extension agent. Validates that the
+    scaffold exists, that the path doesn't escape, and that adding
+    this file doesn't push the scaffold over the size cap. Updates
+    manifest.files + manifest.updated. Removes the matching entry
+    from manifest.planned_extensions so the orchestrator knows it's
+    been satisfied.
+
+    Returns the updated manifest. Raises ValueError on any guard
+    failure (caller surfaces to the agent as a tool error).
+    """
+    safe_path = _safe_rel_path(path)
+    if not isinstance(content, str):
+        raise ValueError("content must be str")
+
+    manifest = get_manifest(kb, slug)
+    if not manifest:
+        raise ValueError(f"scaffold not found: {kb}/{slug}")
+
+    size = len(content.encode("utf-8"))
+    if size > MAX_FILE_BYTES:
+        raise ValueError(
+            f"page {safe_path} is {size} bytes; max is {MAX_FILE_BYTES}"
+        )
+
+    # Cumulative size check — sum the existing files plus the new
+    # one. We can't read every file efficiently here, so we use the
+    # files-count cap as a proxy and trust the per-file cap.
+    if len(manifest.get("files") or []) + 1 > MAX_FILES:
+        raise ValueError(f"scaffold already at {MAX_FILES} file cap")
+    if safe_path in (manifest.get("files") or []):
+        raise ValueError(f"page {safe_path} already exists in scaffold")
+
+    storage.write_text(kb, f"scaffolds/{slug}/files/{safe_path}", content)
+
+    manifest.setdefault("files", []).append(safe_path)
+    # Drop the planned-extension entry that just got fulfilled so
+    # the orchestrator's queue stays accurate.
+    manifest["planned_extensions"] = [
+        e for e in (manifest.get("planned_extensions") or [])
+        if e.get("path") != safe_path
+    ]
+    manifest["updated"] = _now_iso_date()
+    storage.write_text(
+        kb, f"scaffolds/{slug}/manifest.json",
+        json.dumps(manifest, indent=2, sort_keys=True),
+    )
+    _touch_index(kb, manifest)
+    logger.info(
+        "Added page %s to scaffold %s/%s (%d bytes; %d planned remaining)",
+        safe_path, kb, slug, size, len(manifest["planned_extensions"]),
+    )
+    return manifest
 
 
 def create_scaffold(

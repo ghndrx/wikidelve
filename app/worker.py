@@ -40,7 +40,13 @@ async def shutdown(ctx: dict) -> None:
 async def scaffold_create_task(
     ctx: dict, kb_name: str, topic: str, scaffold_type: str, job_id: int,
 ) -> dict:
-    """Run the scaffold agent: research + produce a multi-file template."""
+    """Run the scaffold agent: research + produce the entrypoint trio
+    (index.html + styles.css + app.js). If the first-pass agent
+    declared planned_extensions on the manifest, automatically
+    enqueue one ``scaffold_extend_task`` per planned page so the
+    full multi-page scaffold lands without the user having to fire
+    follow-up requests manually.
+    """
     logger.info(
         "Starting scaffold agent: job=%d kb=%s topic=%r type=%s",
         job_id, kb_name, topic, scaffold_type,
@@ -52,8 +58,74 @@ async def scaffold_create_task(
         logger.exception("Scaffold agent crashed for job %d", job_id)
         await db.update_job(job_id, status="error", error=f"Scaffold crash: {exc}")
         return {"job_id": job_id, "status": "error", "error": str(exc)}
+
     job = await db.get_job(job_id)
-    return {"job_id": job_id, "status": job["status"] if job else "unknown"}
+    if not job or job.get("status") != "complete":
+        return {"job_id": job_id, "status": job.get("status") if job else "unknown"}
+
+    # First pass succeeded — fan out extensions if planned.
+    import json as _json
+    sp = job.get("source_params")
+    slug = None
+    if sp:
+        try:
+            slug = _json.loads(sp).get("scaffold_slug")
+        except (TypeError, ValueError):
+            pass
+    if not slug:
+        return {"job_id": job_id, "status": "complete"}
+
+    from app.scaffolds import get_manifest
+    manifest = get_manifest(kb_name, slug)
+    planned = (manifest or {}).get("planned_extensions") or []
+    if not planned:
+        return {"job_id": job_id, "status": "complete", "extensions_queued": 0}
+
+    redis = ctx.get("redis")
+    if redis is None:
+        logger.warning("First-pass complete but no redis pool to fan out extensions for %s/%s", kb_name, slug)
+        return {"job_id": job_id, "status": "complete", "extensions_queued": 0}
+
+    queued = 0
+    for entry in planned:
+        page_path = entry.get("path")
+        brief = entry.get("brief", "")
+        if not page_path:
+            continue
+        ext_topic = f"scaffold-extend:{kb_name}/{slug}/{page_path}"
+        ext_job = await db.create_job(ext_topic, job_type="scaffold_extend")
+        await redis.enqueue_job(
+            "scaffold_extend_task", kb_name, slug, page_path, brief, ext_job,
+            _queue_name=ARQ_QUEUE_NAME,
+        )
+        queued += 1
+    logger.info(
+        "Scaffold %s/%s: queued %d extension job(s) for planned pages",
+        kb_name, slug, queued,
+    )
+    return {"job_id": job_id, "status": "complete", "extensions_queued": queued}
+
+
+async def scaffold_extend_task(
+    ctx: dict, kb_name: str, slug: str, page_path: str, brief: str, job_id: int,
+) -> dict:
+    """Add ONE planned sibling page to an existing scaffold via the
+    extension agent. Tighter scope = much smaller recursion budget
+    requirement than the original full multi-page first-pass.
+    """
+    logger.info(
+        "Starting scaffold extend: job=%d slug=%s page=%s",
+        job_id, slug, page_path,
+    )
+    try:
+        from app.agent import run_scaffold_extend_agent
+        await run_scaffold_extend_agent(kb_name, slug, page_path, brief, job_id)
+    except Exception as exc:
+        logger.exception("Scaffold extend crashed for job %d", job_id)
+        await db.update_job(job_id, status="error", error=f"Extend crash: {exc}")
+        return {"job_id": job_id, "status": "error", "error": str(exc)}
+    job = await db.get_job(job_id)
+    return {"job_id": job_id, "status": job.get("status") if job else "unknown"}
 
 
 async def agent_improve_task(
@@ -970,7 +1042,7 @@ class WorkerSettings:
         agent_research_task,
         agent_improve_task, agent_resync_kb_task, agent_triage_kb_task,
         agent_resync_cron_task,
-        scaffold_create_task,
+        scaffold_create_task, scaffold_extend_task,
         research_task, research_collect_task, research_synthesize_task,
         local_research_task, quality_task,
         enrich_task, crosslink_task,

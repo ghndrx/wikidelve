@@ -26,7 +26,7 @@ from app.agent_tools import (
 )
 from app.agent_prompts import (
     RESEARCH_AGENT_PROMPT, FACT_CHECKER_PROMPT, ARTICLE_IMPROVE_PROMPT,
-    SCAFFOLD_AGENT_PROMPT,
+    SCAFFOLD_AGENT_PROMPT, SCAFFOLD_EXTEND_PROMPT,
 )
 from app.config import KB_DIRS
 
@@ -484,6 +484,84 @@ async def run_scaffold_agent(
         raise
     except Exception as exc:
         logger.exception("Scaffold agent failed: job=%d", job_id)
+        await db.update_job(job_id, status="error", error=str(exc))
+        raise
+
+
+async def create_scaffold_extend_agent(kb: str, slug: str, page_path: str, brief: str):
+    """Build an agent specialised for adding a single sibling page
+    to an existing scaffold. Tighter tool surface than the full
+    scaffold agent — only the read+write-page tools, no web search,
+    so the agent stays focused on matching tokens rather than
+    re-researching."""
+    from app.agent_tools import get_scaffold_file, add_scaffold_page
+
+    model = _resolve_model()
+    system_prompt = SCAFFOLD_EXTEND_PROMPT.format(
+        kb=kb, slug=slug, page_path=page_path, page_brief=brief,
+    )
+    return create_deep_agent(
+        model=model,
+        tools=[get_scaffold_file, add_scaffold_page],
+        system_prompt=system_prompt,
+    )
+
+
+async def run_scaffold_extend_agent(
+    kb: str, slug: str, page_path: str, brief: str, job_id: int,
+) -> dict:
+    """Add a single sibling page to a scaffold via the extension agent.
+
+    On success the page is in the scaffold's files/ directory and
+    the manifest's planned_extensions list has the entry removed.
+    """
+    from app import db
+    import asyncio as _asyncio
+
+    agent = await create_scaffold_extend_agent(kb, slug, page_path, brief)
+    await db.update_job(job_id, status="agent_scaffolding")
+    logger.info(
+        "Scaffold extend agent started: job=%d slug=%s page=%s",
+        job_id, slug, page_path,
+    )
+
+    user_msg = (
+        f"Add the page '{page_path}' to scaffold '{kb}/{slug}'. "
+        f"Brief: {brief}\n\n"
+        f"Read the existing scaffold's manifest.json, styles.css, "
+        f"and index.html FIRST so you can match tokens + class "
+        f"naming. Then call add_scaffold_page exactly once with "
+        f"the new page's HTML."
+    )
+
+    try:
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": user_msg}]},
+            config={"recursion_limit": 100},
+        )
+        # Verify the page actually got written.
+        from app.scaffolds import get_manifest
+        manifest = get_manifest(kb, slug)
+        if not manifest or page_path not in (manifest.get("files") or []):
+            await db.update_job(
+                job_id, status="error",
+                error=f"Extension agent did not call add_scaffold_page for {page_path}",
+            )
+            return result
+        await db.update_job(job_id, status="complete")
+        logger.info(
+            "Scaffold extend complete: job=%d slug=%s page=%s",
+            job_id, slug, page_path,
+        )
+        return result
+    except (_asyncio.CancelledError, _asyncio.TimeoutError):
+        await db.update_job(
+            job_id, status="error",
+            error="Extension agent exceeded worker timeout",
+        )
+        raise
+    except Exception as exc:
+        logger.exception("Scaffold extend failed: job=%d", job_id)
         await db.update_job(job_id, status="error", error=str(exc))
         raise
 
