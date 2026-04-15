@@ -1187,6 +1187,47 @@ async def view_scaffold_file(kb_name: str, slug: str, rel_path: str):
     return Response(content, media_type=mime, headers=headers)
 
 
+@app.get("/api/scaffolds/{kb_name}/{slug}/events")
+async def scaffold_events_stream(kb_name: str, slug: str, request: Request):
+    """Server-Sent Events stream for hot-reload.
+
+    Emits `event: update` with the manifest's ``updated`` timestamp
+    whenever storage changes (e.g. an extension page gets added by
+    the scaffold-extend worker). Client reloads the iframe on each
+    event. Poll loop on the server side — O(1) per connected viewer,
+    no change-capture plumbing in the storage layer.
+    """
+    import asyncio
+    from starlette.responses import StreamingResponse
+    from app.scaffolds import get_manifest
+
+    async def gen():
+        last_key = None
+        # Emit an initial "hello" so clients confirm the channel.
+        yield "event: hello\ndata: {}\n\n"
+        while True:
+            if await request.is_disconnected():
+                return
+            manifest = get_manifest(kb_name, slug)
+            if not manifest:
+                yield "event: gone\ndata: {}\n\n"
+                return
+            # Version key: (updated, files count). Covers both manifest
+            # timestamp bumps AND file-list growth (extension fan-out).
+            key = (manifest.get("updated"), len(manifest.get("files") or []))
+            if key != last_key:
+                last_key = key
+                payload = json.dumps({"updated": manifest.get("updated"), "files": len(manifest.get("files") or [])})
+                yield f"event: update\ndata: {payload}\n\n"
+            await asyncio.sleep(2.0)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/scaffolds/{kb_name}/{slug}", response_class=HTMLResponse)
 async def view_scaffold(request: Request, kb_name: str, slug: str):
     """Scaffold viewer page — description + sandboxed iframe + file listing."""

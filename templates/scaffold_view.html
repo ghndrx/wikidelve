@@ -145,6 +145,31 @@
 
     // Copy button: pulls the already-loaded content, falls back to
     // fetch if the user hasn't expanded that file yet.
+    // Hot reload: listen for manifest changes via SSE and reload the
+    // iframe + re-parse tokens whenever storage updates. Lets the user
+    // watch the agent fan out extension pages in real time.
+    if (window.EventSource) {
+        var es = new EventSource('/api/scaffolds/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/events');
+        var firstUpdate = true;
+        es.addEventListener('update', function() {
+            if (firstUpdate) { firstUpdate = false; return; }
+            var iframe = document.getElementById('scaffold-preview-iframe');
+            if (iframe) {
+                var src = iframe.src;
+                iframe.src = 'about:blank';
+                setTimeout(function() { iframe.src = src; }, 50);
+            }
+            var body = document.getElementById('token-editor-body');
+            if (body) {
+                fetch('/sandbox/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/styles.css', {cache: 'no-store'})
+                    .then(function(r) { return r.ok ? r.text() : ''; })
+                    .then(function(css) { renderTokenEditor(parseTokens(css)); });
+            }
+        });
+        es.addEventListener('gone', function() { es.close(); });
+        window.addEventListener('beforeunload', function() { es.close(); });
+    }
+
     // Design token editor: parse :root from styles.css, render inputs,
     // push changes to the iframe via postMessage (see the shim the
     // sandbox handler injects into every HTML response).
