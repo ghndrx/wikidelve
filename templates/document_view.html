@@ -4,8 +4,9 @@
 
 {% block content %}
 <style nonce="{{ csp_nonce() }}">
-/* NotebookLM-style 3-column layout: sources | chat (primary) | outputs.
-   Chat is the center of gravity — wider than the rails by design. */
+/* NotebookLM-style 3-column layout on desktop.
+   On narrow screens we tab-collapse sources + preview behind buttons
+   so the chat is the one and only visible thing. */
 .doc-layout {
     display: grid;
     grid-template-columns: 240px minmax(0, 1fr) 320px;
@@ -17,8 +18,38 @@
     .doc-layout { grid-template-columns: 200px minmax(0, 1fr) 280px; }
 }
 @media (max-width: 900px) {
-    .doc-layout { grid-template-columns: 1fr; height: auto; }
-    .doc-rail-collapsible[data-collapsed="true"] .doc-rail-body { display: none; }
+    .doc-layout {
+        display: block;
+        height: auto;
+    }
+    .doc-layout > .doc-pane { margin-bottom: 12px; }
+    /* Hide the side rails until tab button flips them on. */
+    .doc-layout > .doc-pane[data-rail]:not(.rail-active) { display: none; }
+}
+.mobile-tabs { display: none; }
+@media (max-width: 900px) {
+    .mobile-tabs {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 8px;
+        border-bottom: 1px solid var(--color-border);
+        padding-bottom: 6px;
+    }
+    .mobile-tab {
+        flex: 1;
+        font-size: 12px;
+        padding: 6px 10px;
+        border: 1px solid var(--color-border);
+        border-radius: 6px;
+        background: var(--color-surface);
+        color: var(--color-text);
+        cursor: pointer;
+    }
+    .mobile-tab.active {
+        background: var(--color-accent, #06c);
+        color: #fff;
+        border-color: var(--color-accent, #06c);
+    }
 }
 .doc-rail-collapsible summary { cursor: pointer; user-select: none; }
 .source-item, .pinned-item, .output-item {
@@ -140,28 +171,31 @@
 }
 </style>
 
-<header style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">
-    <div>
+<header style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+    <div style="min-width: 0; flex: 1;">
         <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted);">
-            <a href="/documents" style="color: inherit;">Documents</a> · {{ manifest.doc_type }} · {{ manifest.autonomy_mode }} mode
+            <a href="/documents" style="color: inherit;">← Notebooks</a>
+            {% if manifest.parent_slug %}
+            · <a href="/documents/{{ kb }}/{{ manifest.parent_slug }}" style="color: inherit;" title="Forked from v{{ manifest.parent_version }}">⎇ from {{ manifest.parent_slug }}</a>
+            {% endif %}
         </div>
-        <h1 style="margin: 4px 0 0 0;">{{ manifest.title }}</h1>
-        <p style="color: var(--color-text-secondary); margin: 4px 0 0 0; font-size: 14px;">{{ manifest.brief }}</p>
+        <h1 style="margin: 2px 0 0 0; font-size: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ manifest.title }}">{{ manifest.title }}</h1>
     </div>
-    <div style="font-size: 13px; color: var(--color-text-muted); white-space: nowrap; display: flex; gap: 10px; align-items: center;">
-        {% if manifest.parent_slug %}
-        <a href="/documents/{{ kb }}/{{ manifest.parent_slug }}" style="font-size: 11px; padding: 2px 8px; background: var(--color-surface-alt); border-radius: 3px; color: inherit;" title="Forked from {{ manifest.parent_slug }}@v{{ manifest.parent_version }}">
-            ⎇ from {{ manifest.parent_slug }}
-        </a>
-        {% endif %}
-        <span>v{{ manifest.current_version }} · updated {{ manifest.updated }}</span>
-        <button id="fork-btn" class="wiki-btn" style="font-size: 11px; padding: 2px 8px;" title="Fork this document into a new slug so you can explore alternate drafts without losing the original">⎇ Fork</button>
+    <div style="font-size: 12px; color: var(--color-text-muted); white-space: nowrap; display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+        <span>v{{ manifest.current_version }}</span>
+        <button id="fork-btn" class="wiki-btn" style="font-size: 11px; padding: 3px 8px;" title="Fork this document">⎇ Fork</button>
     </div>
 </header>
 
+<div class="mobile-tabs" role="tablist">
+    <button class="mobile-tab" data-tab="sources" role="tab">📚 Sources</button>
+    <button class="mobile-tab active" data-tab="chat" role="tab">💬 Chat</button>
+    <button class="mobile-tab" data-tab="output" role="tab">📄 Output</button>
+</div>
+
 <div class="doc-layout">
     <!-- LEFT RAIL: Sources (seed articles + pinned facts) -->
-    <div class="doc-pane">
+    <div class="doc-pane" data-rail="sources">
         <div class="rail-section-head" style="display: flex; justify-content: space-between; align-items: center;">
             <span>Sources</span>
             <button id="add-source-btn" class="wiki-btn" style="font-size: 10px; padding: 2px 6px; text-transform: none; letter-spacing: 0;">+ Add</button>
@@ -210,7 +244,7 @@
     </div>
 
     <!-- CENTER (PRIMARY): Chat — takes the most space, NotebookLM-style -->
-    <div class="doc-pane chat-pane-primary">
+    <div class="doc-pane chat-pane-primary rail-active" data-rail="chat">
         <div class="doc-pane-header">
             <span><strong>Chat</strong> with the notebook</span>
             <span style="display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--color-text-muted);">
@@ -230,17 +264,23 @@
                 {{ evt.content }}
             </div>
             {% else %}
-            <div style="padding: 32px 24px; text-align: center; color: var(--color-text-muted); font-size: 13px; display: flex; flex-direction: column; align-items: center; gap: 16px;">
-                <div style="font-size: 36px; line-height: 1;">💬</div>
-                <div>
-                    <div style="font-size: 15px; color: var(--color-text); margin-bottom: 4px;">Ready when you are</div>
-                    <div>This notebook has {{ manifest.seed_articles|length }} source{% if manifest.seed_articles|length != 1 %}s{% endif %} attached. Pick a quick-start below or type your own.</div>
+            <div style="padding: 48px 24px 24px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 20px;">
+                <button type="button" class="starter-btn" data-send="Draft v1 of this document now, using the attached sources."
+                    style="font-size: 16px; padding: 14px 28px; border-radius: 10px; background: var(--color-accent, #06c); color: #fff; border: 0; cursor: pointer; font-weight: 500; box-shadow: 0 4px 16px rgba(6,102,204,0.2);">
+                    📝 Draft v1 now
+                </button>
+                <div style="font-size: 12px; color: var(--color-text-muted);">
+                    {% if manifest.seed_articles %}
+                    Will draft from {{ manifest.seed_articles|length }} source{% if manifest.seed_articles|length != 1 %}s{% endif %}.
+                    {% else %}
+                    ⚠ No sources attached. Use Sources → + Add to link KB articles first, or draft from the brief only.
+                    {% endif %}
                 </div>
-                <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 480px;">
-                    <button type="button" class="starter-btn wiki-btn" data-send="Draft v1 of this document now, using the attached sources.">📝 Draft v1 now</button>
-                    <button type="button" class="starter-btn wiki-btn" data-send="Summarize the key findings across the attached sources in 5 bullets.">📋 Key findings</button>
-                    <button type="button" class="starter-btn wiki-btn" data-send="What are the open questions or gaps the sources don't answer?">❓ Open questions</button>
-                    <button type="button" class="starter-btn wiki-btn" data-send="What would an executive need to know about this topic in one paragraph?">🎯 One-paragraph exec</button>
+                <div style="font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.05em;">or try</div>
+                <div style="display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 520px;">
+                    <button type="button" class="starter-btn wiki-btn" data-send="Summarize the key findings across the attached sources in 5 bullets." style="font-size: 12px;">📋 Key findings</button>
+                    <button type="button" class="starter-btn wiki-btn" data-send="What are the open questions or gaps the sources don't answer?" style="font-size: 12px;">❓ Open questions</button>
+                    <button type="button" class="starter-btn wiki-btn" data-send="What would an executive need to know about this topic in one paragraph?" style="font-size: 12px;">🎯 Exec paragraph</button>
                 </div>
             </div>
             {% endfor %}
@@ -255,7 +295,7 @@
     </div>
 
     <!-- RIGHT RAIL: Outputs (preview + versions + generators) -->
-    <div class="doc-pane">
+    <div class="doc-pane" data-rail="output">
         <div class="rail-section-head" style="display: flex; justify-content: space-between; align-items: center;">
             <span>Preview</span>
             {% if manifest.current_version > 0 %}
@@ -326,6 +366,17 @@
               });
         });
     }
+
+    // Mobile tabs: show one rail at a time on narrow viewports.
+    document.querySelectorAll('.mobile-tab').forEach(function(tab) {
+        tab.addEventListener('click', function() {
+            var target = tab.dataset.tab;
+            document.querySelectorAll('.mobile-tab').forEach(function(t) { t.classList.toggle('active', t === tab); });
+            document.querySelectorAll('.doc-layout > .doc-pane[data-rail]').forEach(function(p) {
+                p.classList.toggle('rail-active', p.dataset.rail === target);
+            });
+        });
+    });
 
     // Starter quick-send buttons (empty-state chat).
     document.querySelectorAll('.starter-btn').forEach(function(btn) {
