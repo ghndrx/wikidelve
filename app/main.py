@@ -1809,11 +1809,31 @@ async def api_document_chat(request: Request, kb_name: str, slug: str):
 
 @app.get("/documents/{kb_name}/{slug}", response_class=HTMLResponse)
 async def view_document(request: Request, kb_name: str, slug: str):
+    import re as _re
     from app.documents import get_manifest, get_history
     manifest = get_manifest(kb_name, slug)
     if not manifest:
         raise HTTPException(status_code=404, detail="document not found")
     history = get_history(kb_name, slug, limit=50)
+
+    # Pre-render each agent turn's markdown to HTML and split off the
+    # <think>...</think> reasoning block so the template can collapse
+    # it behind a "Show reasoning" disclosure. User turns stay plain
+    # text; we don't run their content through markdown (too easy to
+    # surface accidental formatting artifacts).
+    think_re = _re.compile(r"<think>(.*?)</think>", flags=_re.DOTALL | _re.IGNORECASE)
+    for evt in history:
+        if evt.get("type") != "turn":
+            continue
+        content = evt.get("content") or ""
+        if evt.get("role") == "agent":
+            m = think_re.search(content)
+            if m:
+                evt["think_html"] = markdown.markdown(m.group(1).strip(), extensions=["fenced_code"])
+                content = think_re.sub("", content).strip()
+            evt["content_html"] = markdown.markdown(content, extensions=["fenced_code", "tables"])
+        else:
+            evt["content_html"] = None  # template falls back to plain textContent
     return render(
         "document_view.html",
         kb=kb_name, slug=slug,
