@@ -407,7 +407,13 @@ async def run_scaffold_agent(
     try:
         result = await agent.ainvoke(
             {"messages": [{"role": "user", "content": user_msg}]},
-            config={"recursion_limit": 80},
+            # Multi-page scaffolds with detailed specs need more
+            # recursion than 80 — the prior limit silently
+            # truncated agents mid-plan, leaving "Let me create
+            # the scaffold..." as the final message and no actual
+            # write_scaffold_files call. 200 matches the research
+            # agent's headroom for similarly-deep loops.
+            config={"recursion_limit": 200},
         )
         final_message = result["messages"][-1]
         content = (
@@ -415,11 +421,46 @@ async def run_scaffold_agent(
             if isinstance(final_message.content, str)
             else str(final_message.content)
         )
-        # Try to pull the slug off the last tool result — scaffolds
-        # tool returns JSON {slug, kb, preview_url, file_count}.
+        # Detect whether write_scaffold_files actually ran. The tool
+        # echoes a JSON envelope with "slug" — search the agent's
+        # full message trail (not just the final message) since
+        # final-message text often paraphrases the result. If we
+        # don't find a real slug, this is NOT a successful run —
+        # mark the job as error so the operator sees the truth and
+        # we don't pollute the listing with phantom completions.
         import json as _json, re as _re
-        slug_match = _re.search(r'"slug"\s*:\s*"([^"]+)"', content)
-        slug = slug_match.group(1) if slug_match else None
+
+        slug = None
+        for msg in result.get("messages", []):
+            text = msg.content if isinstance(msg.content, str) else str(getattr(msg, "content", ""))
+            m = _re.search(r'"slug"\s*:\s*"([^"]+)"[^{}]*"preview_url"', text)
+            if m:
+                slug = m.group(1)
+                break
+
+        if not slug:
+            # Verify against the actual store so we don't mark a
+            # job errored when the agent did write but the message
+            # trail just doesn't echo the slug we recognise.
+            from app.scaffolds import list_scaffolds
+            recent_slugs = {s["slug"] for s in list_scaffolds(kb)}
+            # Heuristic: did anything new show up after kickoff?
+            # Without a kickoff snapshot we can't be sure, so we
+            # leave the verify pass for an operator hook later.
+            # For now, if the trail has no slug, treat as error.
+            logger.warning(
+                "Scaffold agent finished WITHOUT calling write_scaffold_files: "
+                "job=%d kb=%s topic=%r — recursion limit exhausted or "
+                "agent gave up. Marking as error.",
+                job_id, kb, topic,
+            )
+            await db.update_job(
+                job_id, status="error",
+                error="Agent finished without calling write_scaffold_files (likely recursion-limit exhaustion).",
+                content=content,
+            )
+            return result
+
         await db.update_job(
             job_id, status="complete", content=content,
             source_params=_json.dumps({
