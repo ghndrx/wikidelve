@@ -169,6 +169,32 @@
 .chat-content th, .chat-content td { border: 1px solid var(--color-border); padding: 4px 8px; }
 .chat-content hr { border: 0; border-top: 1px solid var(--color-border); margin: 12px 0; }
 .chat-content a { color: var(--color-accent, #06c); }
+.citation-pill {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 8px;
+    margin: 0 2px;
+    background: rgba(6,102,204,0.12);
+    color: var(--color-accent, #06c) !important;
+    border-radius: 10px;
+    text-decoration: none !important;
+    border: 1px solid rgba(6,102,204,0.25);
+    font-family: var(--font-mono);
+    vertical-align: baseline;
+    cursor: pointer;
+}
+.citation-pill:hover { background: rgba(6,102,204,0.2); }
+.source-item.highlighted { background: rgba(6,102,204,0.12) !important; transition: background 0.2s; }
+.chat-auto-sources {
+    margin: 8px 16px;
+    padding: 8px 12px;
+    background: rgba(6,102,204,0.06);
+    border: 1px solid rgba(6,102,204,0.2);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+.chat-auto-sources strong { color: var(--color-text); }
 .chat-think {
     margin-top: 6px;
     margin-bottom: 6px;
@@ -300,7 +326,7 @@
             <div id="sources-list">
                 {% if manifest.seed_articles %}
                 {% for src in manifest.seed_articles %}
-                <div class="source-item" style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+                <div class="source-item" data-source-key="{{ src.kb }}/{{ src.slug }}" style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
                     <a href="/wiki/{{ src.kb }}/{{ src.slug }}" target="_blank" rel="noopener" title="{{ src.kb }}/{{ src.slug }}" style="flex: 1; color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                         📄 {{ src.title or src.slug }}
                     </a>
@@ -745,11 +771,155 @@
         // Drop the empty-state hint if it's still showing.
         var hint = scroll.querySelector('div[style*="text-align: center"]');
         if (hint) hint.remove();
+        // Use the new .chat-turn structure for user/error messages so
+        // they match the server-rendered history.
+        if (role === 'user' || role === 'error') {
+            var turn = document.createElement('div');
+            turn.className = 'chat-turn ' + role;
+            var av = document.createElement('div');
+            av.className = 'chat-avatar';
+            av.textContent = role === 'user' ? '🧑' : '⚠️';
+            var body = document.createElement('div');
+            body.className = 'chat-body';
+            var meta = document.createElement('div');
+            meta.className = 'chat-meta';
+            var role_s = document.createElement('span');
+            role_s.className = 'chat-role';
+            role_s.textContent = role === 'user' ? 'You' : 'Error';
+            var time_s = document.createElement('span');
+            time_s.textContent = new Date().toISOString().slice(11, 19);
+            meta.appendChild(role_s);
+            meta.appendChild(time_s);
+            body.appendChild(meta);
+            var c = document.createElement('div');
+            c.className = 'chat-content plain';
+            c.textContent = content;
+            body.appendChild(c);
+            turn.appendChild(av);
+            turn.appendChild(body);
+            scroll.appendChild(turn);
+            scrollToBottom();
+            return turn;
+        }
+        // Legacy bubble (still used for pending drafts with commit/discard).
         var div = makeBubble(role, content, opts);
         scroll.appendChild(div);
         scrollToBottom();
         return div;
     }
+
+    // Build an agent turn from server-rendered HTML.
+    function appendAgentTurn(data) {
+        var hint = scroll.querySelector('div[style*="text-align: center"]');
+        if (hint) hint.remove();
+        var turn = document.createElement('div');
+        turn.className = 'chat-turn agent';
+        var av = document.createElement('div');
+        av.className = 'chat-avatar';
+        av.textContent = '🤖';
+        var body = document.createElement('div');
+        body.className = 'chat-body';
+        var meta = document.createElement('div');
+        meta.className = 'chat-meta';
+        var role_s = document.createElement('span');
+        role_s.className = 'chat-role';
+        role_s.textContent = 'Agent';
+        var time_s = document.createElement('span');
+        time_s.textContent = new Date().toISOString().slice(11, 19);
+        meta.appendChild(role_s);
+        meta.appendChild(time_s);
+        body.appendChild(meta);
+        if (data.think_html) {
+            var det = document.createElement('details');
+            det.className = 'chat-think';
+            var sum = document.createElement('summary');
+            sum.textContent = 'reasoning';
+            det.appendChild(sum);
+            var tb = document.createElement('div');
+            tb.className = 'chat-think-body';
+            tb.innerHTML = data.think_html;
+            det.appendChild(tb);
+            body.appendChild(det);
+        }
+        var c = document.createElement('div');
+        c.className = 'chat-content';
+        c.innerHTML = data.response_html || '';
+        body.appendChild(c);
+        // Pending bubble gets commit/discard row appended.
+        if (data.pending) {
+            var actions = document.createElement('div');
+            actions.className = 'diff-actions';
+            var commit = document.createElement('button');
+            commit.className = 'wiki-btn commit-btn';
+            commit.textContent = '✓ Commit pending';
+            var discard = document.createElement('button');
+            discard.className = 'wiki-btn discard-btn';
+            discard.textContent = '✗ Discard';
+            actions.appendChild(commit);
+            actions.appendChild(discard);
+            body.appendChild(actions);
+            var diffWrap = document.createElement('div');
+            diffWrap.className = 'diff-wrap';
+            diffWrap.style.cssText = 'margin-top:8px;border:1px solid var(--color-border);border-radius:4px;background:var(--color-surface-alt);font-family:var(--font-mono);font-size:11px;max-height:320px;overflow:auto;';
+            diffWrap.textContent = 'Loading diff…';
+            body.appendChild(diffWrap);
+            setTimeout(function() { loadDiffInto(diffWrap); }, 0);
+        }
+        turn.appendChild(av);
+        turn.appendChild(body);
+        scroll.appendChild(turn);
+        scrollToBottom();
+        return turn;
+    }
+
+    // Append a single source item to the left rail (used when auto-seed
+    // adds sources mid-conversation). Idempotent check via slug.
+    function appendSourceToRail(src) {
+        var list = document.getElementById('sources-list');
+        if (!list) return;
+        // Kill the empty-state box if it's still there.
+        var empty = list.querySelector('div[style*="text-align: center"]');
+        if (empty) empty.remove();
+        // Avoid dup.
+        if (list.querySelector('[data-source-key="' + src.kb + '/' + src.slug + '"]')) return;
+        var row = document.createElement('div');
+        row.className = 'source-item';
+        row.dataset.sourceKey = src.kb + '/' + src.slug;
+        row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        var a = document.createElement('a');
+        a.href = '/wiki/' + src.kb + '/' + src.slug;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.style.cssText = 'flex:1;color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        a.textContent = '📄 ' + (src.title || src.slug);
+        var btn = document.createElement('button');
+        btn.className = 'source-remove-btn wiki-btn';
+        btn.dataset.kb = src.kb;
+        btn.dataset.slug = src.slug;
+        btn.style.cssText = 'font-size:10px;padding:1px 5px;opacity:0.5;';
+        btn.textContent = '×';
+        row.appendChild(a);
+        row.appendChild(btn);
+        list.appendChild(row);
+    }
+
+    // When the user hovers a citation pill, flash the matching source.
+    function wireCitationHovers() {
+        document.querySelectorAll('.citation-pill').forEach(function(pill) {
+            if (pill.dataset.wired === '1') return;
+            pill.dataset.wired = '1';
+            var key = pill.dataset.kb + '/' + pill.dataset.slug;
+            pill.addEventListener('mouseenter', function() {
+                var src = document.querySelector('[data-source-key="' + key + '"]');
+                if (src) src.classList.add('highlighted');
+            });
+            pill.addEventListener('mouseleave', function() {
+                var src = document.querySelector('[data-source-key="' + key + '"]');
+                if (src) src.classList.remove('highlighted');
+            });
+        });
+    }
+    wireCitationHovers();
 
     // Replace a button's parent's contents with a static status
     // message — built with createElement so even the version number
@@ -784,7 +954,31 @@
             if (data.error) {
                 appendBubble('error', String(data.error));
             } else {
-                appendBubble('agent', String(data.response || ''), {pending: !!data.pending});
+                // Auto-added sources notice (NotebookLM-style "I pulled these in").
+                if (data.auto_added_sources && data.auto_added_sources.length) {
+                    var notice = document.createElement('div');
+                    notice.className = 'chat-auto-sources';
+                    var label = document.createElement('div');
+                    label.innerHTML = ''; // lint-safe empty
+                    var titleSpan = document.createElement('strong');
+                    titleSpan.textContent = '📎 Pulled ' + data.auto_added_sources.length + ' source' + (data.auto_added_sources.length === 1 ? '' : 's') + ' from your KB:';
+                    notice.appendChild(titleSpan);
+                    data.auto_added_sources.forEach(function(s, i) {
+                        notice.appendChild(document.createTextNode(i === 0 ? ' ' : ', '));
+                        var a = document.createElement('a');
+                        a.href = '/wiki/' + s.kb + '/' + s.slug;
+                        a.target = '_blank';
+                        a.rel = 'noopener';
+                        a.textContent = s.title || s.slug;
+                        a.style.color = 'var(--color-accent, #06c)';
+                        notice.appendChild(a);
+                        appendSourceToRail(s);
+                    });
+                    scroll.appendChild(notice);
+                }
+                // Agent turn: use rendered HTML (markdown + citation pills).
+                appendAgentTurn(data);
+                wireCitationHovers();
                 if (data.version_after && data.version_after > 0) {
                     statusEl.textContent = 'v' + Number(data.version_after) + ' is current';
                     var iframe = document.querySelector('#doc-preview iframe');

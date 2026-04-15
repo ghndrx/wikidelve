@@ -1799,41 +1799,114 @@ async def api_document_chat(request: Request, kb_name: str, slug: str):
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
 
+    # Auto-expand sources: if the user's message suggests topics that
+    # aren't in the current seed set, hybrid-search and attach the
+    # top novel matches before the agent runs. Makes the notebook
+    # feel NotebookLM-y — ask about something and it grabs sources.
+    auto_added: list[dict] = []
+    try:
+        from app.hybrid_search import hybrid_search
+        from app.documents import get_manifest
+        import json as _json
+        from app import storage
+        manifest = get_manifest(kb_name, slug)
+        if manifest and len(message) >= 10:
+            have = {(s.get("kb"), s.get("slug"))
+                    for s in (manifest.get("seed_articles") or [])}
+            hits = await hybrid_search(message, kb_name=kb_name, limit=5)
+            # Keep it modest — 3 novel, above a quality floor.
+            for h in (hits or [])[:5]:
+                if not isinstance(h, dict):
+                    continue
+                rkb = h.get("kb") or kb_name
+                rslug = h.get("slug")
+                if not rslug or (rkb, rslug) in have:
+                    continue
+                score = float(h.get("score") or 0)
+                if score < 0.25:
+                    continue  # too weak a match; don't pollute the source list
+                auto_added.append({"kb": rkb, "slug": rslug, "title": h.get("title") or rslug})
+                have.add((rkb, rslug))
+                if len(auto_added) >= 3:
+                    break
+            if auto_added:
+                seeds = list(manifest.get("seed_articles") or []) + auto_added
+                manifest["seed_articles"] = seeds
+                storage.write_text(
+                    kb_name, f"documents/{slug}/manifest.json",
+                    _json.dumps(manifest, indent=2, sort_keys=True),
+                )
+    except Exception:
+        # Never fail the chat turn because auto-seed failed.
+        auto_added = []
+
     result = await run_doc_chat_turn(kb_name, slug, message)
     if "error" in result:
-        # Don't surface as 500 — the chat UI can render this as an
-        # in-conversation agent error message.
-        return {"error": result["error"], "ok": False}
-    return {**result, "ok": True}
+        return {"error": result["error"], "ok": False, "auto_added_sources": auto_added}
+    # Pre-render the agent response so the UI can drop markdown +
+    # citation pills inline without client-side parsing.
+    rendered = _render_chat_turn(result.get("response") or "")
+    return {
+        **result,
+        "response_html": rendered["content_html"],
+        "think_html": rendered["think_html"],
+        "cited_refs": rendered["cited_refs"],
+        "auto_added_sources": auto_added,
+        "ok": True,
+    }
+
+
+import re as _re_chat
+_THINK_RE = _re_chat.compile(r"<think>(.*?)</think>", flags=_re_chat.DOTALL | _re_chat.IGNORECASE)
+_REF_RE = _re_chat.compile(r"\[ref:([a-z0-9_\-]+)/([a-z0-9_\-]+)\]", flags=_re_chat.IGNORECASE)
+
+
+def _render_chat_turn(text: str) -> dict:
+    """Split <think>…</think> off, render markdown, and rewrite
+    [ref:kb/slug] citations into clickable pills. Returns dict with
+    ``think_html``, ``content_html``, and ``cited_refs``.
+    """
+    content = text or ""
+    m = _THINK_RE.search(content)
+    think_html = None
+    if m:
+        think_html = markdown.markdown(m.group(1).strip(), extensions=["fenced_code"])
+        content = _THINK_RE.sub("", content).strip()
+
+    cited: list[dict] = []
+    def _pill(match):
+        ref_kb, ref_slug = match.group(1), match.group(2)
+        cited.append({"kb": ref_kb, "slug": ref_slug})
+        return (
+            f'<a class="citation-pill" href="/wiki/{ref_kb}/{ref_slug}" '
+            f'target="_blank" rel="noopener" '
+            f'data-kb="{ref_kb}" data-slug="{ref_slug}">{ref_slug}</a>'
+        )
+    # Replace refs BEFORE markdown so fenced code doesn't escape brackets.
+    content = _REF_RE.sub(_pill, content)
+    content_html = markdown.markdown(content, extensions=["fenced_code", "tables"])
+    return {
+        "think_html": think_html,
+        "content_html": content_html,
+        "cited_refs": cited,
+    }
 
 
 @app.get("/documents/{kb_name}/{slug}", response_class=HTMLResponse)
 async def view_document(request: Request, kb_name: str, slug: str):
-    import re as _re
     from app.documents import get_manifest, get_history
     manifest = get_manifest(kb_name, slug)
     if not manifest:
         raise HTTPException(status_code=404, detail="document not found")
     history = get_history(kb_name, slug, limit=50)
-
-    # Pre-render each agent turn's markdown to HTML and split off the
-    # <think>...</think> reasoning block so the template can collapse
-    # it behind a "Show reasoning" disclosure. User turns stay plain
-    # text; we don't run their content through markdown (too easy to
-    # surface accidental formatting artifacts).
-    think_re = _re.compile(r"<think>(.*?)</think>", flags=_re.DOTALL | _re.IGNORECASE)
     for evt in history:
         if evt.get("type") != "turn":
             continue
-        content = evt.get("content") or ""
         if evt.get("role") == "agent":
-            m = think_re.search(content)
-            if m:
-                evt["think_html"] = markdown.markdown(m.group(1).strip(), extensions=["fenced_code"])
-                content = think_re.sub("", content).strip()
-            evt["content_html"] = markdown.markdown(content, extensions=["fenced_code", "tables"])
+            rendered = _render_chat_turn(evt.get("content") or "")
+            evt.update(rendered)
         else:
-            evt["content_html"] = None  # template falls back to plain textContent
+            evt["content_html"] = None  # plain text path in template
     return render(
         "document_view.html",
         kb=kb_name, slug=slug,
