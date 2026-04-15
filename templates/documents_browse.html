@@ -220,16 +220,90 @@
 
 <div class="doc-page-head">
     <div>
-        <h1>Documents</h1>
-        <p>Versioned rendered deliverables (PDF / PPTX / Markdown) you iterate via chat. Each document has a brief, optional seed articles from your KB, and an autonomy mode for the drafting agent.</p>
+        <h1>Notebooks</h1>
+        <p>Source-grounded AI notebooks. Each notebook has seed articles from your KB and a drafting agent you iterate with via chat. Outputs include briefing docs, FAQs, study guides, timelines.</p>
     </div>
     <div style="display: flex; flex-direction: column; gap: 8px; align-items: flex-end;">
-        <button id="new-doc-btn" class="doc-new-btn">+ New document</button>
         <span style="font-size: 13px; color: var(--color-text-muted);">
-            <strong id="doc-total-count">{{ items|length }}</strong> total
+            <strong id="doc-total-count">{{ items|length }}</strong> notebooks
         </span>
     </div>
 </div>
+
+{# Primary chat entry — the NotebookLM-style "start here" surface. #}
+<div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 12px; padding: 20px 24px; margin-bottom: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.04);">
+    <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px;">
+        <h2 style="margin: 0; font-size: 16px;">Start a new notebook</h2>
+        <span style="font-size: 11px; color: var(--color-text-muted);">Give it a brief — the agent picks seed articles and drafts v1</span>
+    </div>
+    <textarea id="quick-brief" rows="2" placeholder="e.g. 'A briefing on our LLM gateway architecture — what we run, why, key decisions. Pull from the llm-gateway and bedrock articles.' (Cmd+Enter to create)"
+        style="width: 100%; padding: 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); color: var(--color-text); font-family: inherit; font-size: 14px; resize: vertical; min-height: 58px;"></textarea>
+    <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
+        <input type="text" id="quick-title" placeholder="Optional title (derived from brief if blank)"
+            style="flex: 1; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); color: var(--color-text); font-size: 13px;" />
+        <select id="quick-autonomy" style="padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); font-size: 13px;" title="propose = draft for review, auto = commit directly">
+            <option value="propose">propose</option>
+            <option value="auto">auto</option>
+            <option value="plan-first">plan-first</option>
+        </select>
+        <label style="display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--color-text-muted); cursor: pointer;" title="Strict mode — refuses uncited claims, NotebookLM-style">
+            <input type="checkbox" id="quick-strict" /> strict grounding
+        </label>
+        <button id="quick-create" class="doc-new-btn">Create &amp; chat →</button>
+    </div>
+    <div id="quick-status" style="font-size: 12px; color: var(--color-text-muted); margin-top: 6px; min-height: 16px;"></div>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    var briefEl = document.getElementById('quick-brief');
+    var titleEl = document.getElementById('quick-title');
+    var autEl = document.getElementById('quick-autonomy');
+    var strictEl = document.getElementById('quick-strict');
+    var createBtn = document.getElementById('quick-create');
+    var status = document.getElementById('quick-status');
+    var kb = {{ kb|tojson }};
+
+    function deriveTitle(text) {
+        var t = (text || '').trim().split('\n')[0].slice(0, 80);
+        return t || 'Untitled notebook';
+    }
+
+    function submit() {
+        var brief = (briefEl.value || '').trim();
+        if (!brief) { briefEl.focus(); return; }
+        createBtn.disabled = true;
+        status.textContent = 'creating notebook…';
+        fetch('/api/documents/' + encodeURIComponent(kb) + '/create', {
+            method: 'POST',
+            headers: {'content-type': 'application/json'},
+            body: JSON.stringify({
+                title: (titleEl.value || '').trim() || deriveTitle(brief),
+                brief: brief,
+                autonomy_mode: autEl.value,
+                grounding_mode: strictEl.checked ? 'strict' : 'standard',
+            }),
+        }).then(function(r) { return r.json().then(function(j) { return {ok: r.ok, body: j}; }); })
+          .then(function(res) {
+            if (!res.ok) {
+                createBtn.disabled = false;
+                status.textContent = 'failed: ' + (res.body.detail || 'unknown');
+                return;
+            }
+            status.textContent = 'opening notebook…';
+            location.href = '/documents/' + kb + '/' + res.body.slug;
+          }).catch(function(err) {
+            createBtn.disabled = false;
+            status.textContent = 'error: ' + err.message;
+          });
+    }
+
+    createBtn.addEventListener('click', submit);
+    briefEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); }
+    });
+})();
+</script>
 
 <div class="doc-toolbar">
     <input type="search" class="doc-search" id="doc-search" placeholder="Search by title..." />

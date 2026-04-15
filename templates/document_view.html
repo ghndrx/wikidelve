@@ -4,16 +4,44 @@
 
 {% block content %}
 <style nonce="{{ csp_nonce() }}">
+/* NotebookLM-style 3-column layout: sources | chat (primary) | outputs.
+   Chat is the center of gravity — wider than the rails by design. */
 .doc-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-    gap: 16px;
+    grid-template-columns: 240px minmax(0, 1fr) 320px;
+    gap: 12px;
     height: calc(100vh - 140px);
     min-height: 600px;
 }
+@media (max-width: 1200px) {
+    .doc-layout { grid-template-columns: 200px minmax(0, 1fr) 280px; }
+}
 @media (max-width: 900px) {
     .doc-layout { grid-template-columns: 1fr; height: auto; }
+    .doc-rail-collapsible[data-collapsed="true"] .doc-rail-body { display: none; }
 }
+.doc-rail-collapsible summary { cursor: pointer; user-select: none; }
+.source-item, .pinned-item, .output-item {
+    padding: 6px 10px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-text);
+    text-decoration: none;
+    display: block;
+}
+.source-item:hover, .pinned-item:hover { background: var(--color-surface-alt); }
+.source-item:last-child, .pinned-item:last-child { border-bottom: 0; }
+.rail-section-head {
+    padding: 8px 12px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-muted);
+    background: var(--color-surface-alt);
+    border-bottom: 1px solid var(--color-border);
+    font-weight: 600;
+}
+.chat-pane-primary { box-shadow: 0 2px 12px rgba(0,0,0,0.04); }
 .doc-pane {
     display: flex;
     flex-direction: column;
@@ -132,47 +160,38 @@
 </header>
 
 <div class="doc-layout">
-    <!-- Left: Document preview -->
+    <!-- LEFT RAIL: Sources (seed articles + pinned facts) -->
     <div class="doc-pane">
-        <div class="doc-pane-header">
-            <span><strong>Preview</strong></span>
-            <span>
-                {% if manifest.current_version > 0 %}
-                <a href="/api/documents/{{ kb }}/{{ slug }}/export" target="_blank" rel="noopener" style="font-size: 12px;">Open / download →</a>
-                {% endif %}
-            </span>
-        </div>
-        <div class="doc-pane-body" id="doc-preview">
-            {% if manifest.current_version == 0 %}
-            <div style="padding: 32px; text-align: center; color: var(--color-text-muted);">
-                <p>No version committed yet.</p>
-                <p style="font-size: 13px;">Send a chat message →<br/>The agent will draft v1.</p>
-            </div>
-            {% elif manifest.doc_type == 'pdf' %}
-            <iframe src="/api/documents/{{ kb }}/{{ slug }}/export" style="width: 100%; height: 100%; border: 0;" title="PDF preview"></iframe>
-            {% else %}
-            <pre id="md-preview" style="margin: 0; padding: 16px; white-space: pre-wrap; font-family: var(--font-mono); font-size: 13px;">Loading...</pre>
-            {% endif %}
-        </div>
-        <div class="version-pills" id="version-pills">
-            {% for entry in manifest.versions %}
-            <span class="version-pill{% if entry.v == manifest.current_version %} current{% endif %}" data-v="{{ entry.v }}" title="{{ entry.trigger }}">v{{ entry.v }}</span>
+        <div class="rail-section-head">Sources</div>
+        <div class="doc-pane-body">
+            {% if manifest.seed_articles %}
+            {% for src in manifest.seed_articles %}
+            <a class="source-item" href="/wiki/{{ src.kb }}/{{ src.slug }}" target="_blank" rel="noopener" title="{{ src.kb }}/{{ src.slug }}">
+                📄 {{ src.title or src.slug }}
+            </a>
             {% endfor %}
-        </div>
-        <div style="padding: 8px 12px; border-top: 1px solid var(--color-border); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; background: var(--color-surface);">
-            <span style="font-size: 11px; color: var(--color-text-muted); margin-right: 4px;">Generate:</span>
-            <button class="wiki-btn output-btn" data-output="briefing" style="font-size: 11px; padding: 3px 8px;">Briefing</button>
-            <button class="wiki-btn output-btn" data-output="faq" style="font-size: 11px; padding: 3px 8px;">FAQ</button>
-            <button class="wiki-btn output-btn" data-output="study-guide" style="font-size: 11px; padding: 3px 8px;">Study guide</button>
-            <button class="wiki-btn output-btn" data-output="timeline" style="font-size: 11px; padding: 3px 8px;">Timeline</button>
-            <span id="output-status" style="font-size: 11px; color: var(--color-text-muted); margin-left: auto;"></span>
+            {% else %}
+            <div style="padding: 16px; font-size: 12px; color: var(--color-text-muted);">
+                No seed articles linked.
+            </div>
+            {% endif %}
+            <div class="rail-section-head" style="margin-top: 8px;">Pinned facts</div>
+            {% if manifest.pinned_facts %}
+            {% for f in manifest.pinned_facts %}
+            <div class="pinned-item">📌 {{ f }}</div>
+            {% endfor %}
+            {% else %}
+            <div style="padding: 12px; font-size: 12px; color: var(--color-text-muted);">
+                None yet. The agent adds these via chat.
+            </div>
+            {% endif %}
         </div>
     </div>
 
-    <!-- Right: Chat -->
-    <div class="doc-pane">
+    <!-- CENTER (PRIMARY): Chat — takes the most space, NotebookLM-style -->
+    <div class="doc-pane chat-pane-primary">
         <div class="doc-pane-header">
-            <span><strong>Chat</strong> with the drafting agent</span>
+            <span><strong>Chat</strong> with the notebook</span>
             <span style="display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--color-text-muted);">
                 <span>{{ manifest.autonomy_mode }} mode</span>
                 <label style="display: flex; gap: 4px; align-items: center; cursor: pointer;" title="Strict mode requires every factual claim to cite a source; refuses uncited answers (NotebookLM-style).">
@@ -197,11 +216,47 @@
             {% endfor %}
         </div>
         <div class="chat-input-wrap">
-            <textarea class="chat-input" id="chat-input" placeholder="Type a message... (Cmd+Enter to send)"></textarea>
+            <textarea class="chat-input" id="chat-input" placeholder="Ask about the sources, request a draft, refine a section... (Cmd+Enter to send)"></textarea>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
                 <span id="chat-status" style="font-size: 11px; color: var(--color-text-muted);"></span>
                 <button id="chat-send" class="wiki-btn" style="font-size: 13px;">Send</button>
             </div>
+        </div>
+    </div>
+
+    <!-- RIGHT RAIL: Outputs (preview + versions + generators) -->
+    <div class="doc-pane">
+        <div class="rail-section-head" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Preview</span>
+            {% if manifest.current_version > 0 %}
+            <a href="/api/documents/{{ kb }}/{{ slug }}/export" target="_blank" rel="noopener" style="font-size: 10px; text-transform: none; letter-spacing: 0; color: var(--color-text-muted);">Open →</a>
+            {% endif %}
+        </div>
+        <div class="doc-pane-body" id="doc-preview" style="min-height: 200px; max-height: 50%;">
+            {% if manifest.current_version == 0 %}
+            <div style="padding: 20px; text-align: center; color: var(--color-text-muted); font-size: 12px;">
+                No version yet. Chat to draft v1.
+            </div>
+            {% elif manifest.doc_type == 'pdf' %}
+            <iframe src="/api/documents/{{ kb }}/{{ slug }}/export" style="width: 100%; height: 100%; min-height: 200px; border: 0;" title="PDF preview"></iframe>
+            {% else %}
+            <pre id="md-preview" style="margin: 0; padding: 10px; white-space: pre-wrap; font-family: var(--font-mono); font-size: 11px;">Loading...</pre>
+            {% endif %}
+        </div>
+        <div class="version-pills" id="version-pills" style="max-height: 80px; overflow-y: auto;">
+            {% for entry in manifest.versions %}
+            <span class="version-pill{% if entry.v == manifest.current_version %} current{% endif %}" data-v="{{ entry.v }}" title="{{ entry.trigger }}">v{{ entry.v }}</span>
+            {% endfor %}
+        </div>
+        <div style="padding: 10px 12px; border-top: 1px solid var(--color-border); background: var(--color-surface);">
+            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); margin-bottom: 6px;">Generate from sources</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+                <button class="wiki-btn output-btn" data-output="briefing" style="font-size: 11px; padding: 4px 8px;">📋 Briefing</button>
+                <button class="wiki-btn output-btn" data-output="faq" style="font-size: 11px; padding: 4px 8px;">❓ FAQ</button>
+                <button class="wiki-btn output-btn" data-output="study-guide" style="font-size: 11px; padding: 4px 8px;">📚 Study guide</button>
+                <button class="wiki-btn output-btn" data-output="timeline" style="font-size: 11px; padding: 4px 8px;">📅 Timeline</button>
+            </div>
+            <div id="output-status" style="font-size: 11px; color: var(--color-text-muted); margin-top: 6px; min-height: 14px;"></div>
         </div>
     </div>
 </div>

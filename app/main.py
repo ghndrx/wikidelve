@@ -1414,6 +1414,13 @@ async def api_document_create(request: Request, kb_name: str):
             status_code=400,
             detail=f"autonomy_mode must be one of {sorted(AUTONOMY_MODES)}",
         )
+    from app.documents import GROUNDING_MODES, DEFAULT_GROUNDING
+    grounding_mode = body.get("grounding_mode", DEFAULT_GROUNDING)
+    if grounding_mode not in GROUNDING_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"grounding_mode must be one of {sorted(GROUNDING_MODES)}",
+        )
 
     try:
         slug = create_document(
@@ -1424,6 +1431,21 @@ async def api_document_create(request: Request, kb_name: str):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    # Stamp grounding on the fresh manifest (create_document doesn't
+    # take it as a kwarg; we set it as a post-create patch so the
+    # doc-chat agent picks it up on the first turn).
+    if grounding_mode != DEFAULT_GROUNDING:
+        import json as _json
+        from app import storage
+        from app.documents import get_manifest
+        m = get_manifest(kb_name, slug)
+        if m:
+            m["grounding_mode"] = grounding_mode
+            storage.write_text(
+                kb_name, f"documents/{slug}/manifest.json",
+                _json.dumps(m, indent=2, sort_keys=True),
+            )
     return {"kb": kb_name, "slug": slug, "status": "created"}
 
 
