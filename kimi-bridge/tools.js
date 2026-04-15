@@ -43,8 +43,11 @@ function pickViewport(v) {
   return VIEWPORTS[v] || VIEWPORTS.desktop;
 }
 
-// Clamp base64 size so a 10MB screenshot doesn't blow out the context.
-const MAX_PNG_BYTES = 1_500_000; // ~2MB base64
+// Screenshots go to disk inside the workdir, not into the tool response —
+// base64-encoding a 1.5MB PNG into the stream devours 500K+ tokens per
+// call and will blow past Kimi's 262K context window after 2-3 calls.
+// Tools return the file path; kimi can read/display it from disk if needed.
+import { randomUUID } from "node:crypto";
 
 async function withPage(viewport, fn) {
   const browser = await getBrowser();
@@ -108,19 +111,17 @@ export function buildTools({ workdirRoot }) {
         if (waitMs) await page.waitForTimeout(waitMs);
         const title = (await page.title().catch(() => "")) || "";
         const finalUrl = page.url();
-        const buf = await page.screenshot({ type: "png", fullPage });
-        if (buf.length > MAX_PNG_BYTES) {
-          return {
-            output: JSON.stringify({ error: "screenshot too large", bytes: buf.length, title, finalUrl }),
-            message: `screenshot exceeded ${MAX_PNG_BYTES}B cap`,
-          };
-        }
+        const fname = `.screenshots/ext-${randomUUID().slice(0, 8)}.png`;
+        const abs = path.resolve(workdirRoot, fname);
+        await fs.mkdir(path.dirname(abs), { recursive: true });
+        await page.screenshot({ type: "png", fullPage, path: abs });
+        const { size } = await fs.stat(abs);
         return {
           output: JSON.stringify({
             title, finalUrl, status: resp?.status() ?? null,
-            png_base64: buf.toString("base64"),
+            screenshot_path: fname, size_bytes: size,
           }),
-          message: `Screenshotted ${finalUrl} (${buf.length} bytes)`,
+          message: `Screenshotted ${finalUrl} → ${fname} (${size}B)`,
         };
       });
     },
@@ -187,16 +188,17 @@ export function buildTools({ workdirRoot }) {
         await page.goto("file://" + abs, { waitUntil: "domcontentloaded", timeout: 15_000 });
         if (waitMs) await page.waitForTimeout(waitMs);
         const title = (await page.title().catch(() => "")) || "";
-        const buf = await page.screenshot({ type: "png", fullPage: true });
-        const png = buf.length <= MAX_PNG_BYTES ? buf.toString("base64") : null;
-
+        const shotName = `.screenshots/self-${randomUUID().slice(0, 8)}.png`;
+        const shotAbs = path.resolve(workdirRoot, shotName);
+        await fs.mkdir(path.dirname(shotAbs), { recursive: true });
+        await page.screenshot({ type: "png", fullPage: true, path: shotAbs });
+        const { size } = await fs.stat(shotAbs);
         return {
           output: JSON.stringify({
             path: rel, title, console: consoleMsgs, errors,
-            png_base64: png,
-            png_dropped: png ? undefined : `screenshot ${buf.length}B exceeded cap`,
+            screenshot_path: shotName, size_bytes: size,
           }),
-          message: `Validated ${rel} (${errors.length} errors, ${consoleMsgs.length} console msgs)`,
+          message: `Validated ${rel} → ${shotName} (${errors.length} errors, ${consoleMsgs.length} console)`,
         };
       });
     },

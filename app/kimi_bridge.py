@@ -105,8 +105,10 @@ def walk_workdir(host_path: Path, max_files: int = 50, max_bytes: int = 2_000_00
         if not p.is_file():
             continue
         rel = p.relative_to(host_path).as_posix()
-        # Skip kimi's own metadata (session files, shadow git) if any leak in.
-        if rel.startswith(".kimi/") or rel.startswith(".git/"):
+        # Skip kimi's own metadata (session files, shadow git) + the
+        # sidecar's screenshot cache (tools write there, not scaffold output).
+        if (rel.startswith(".kimi/") or rel.startswith(".git/")
+                or rel.startswith(".screenshots/")):
             continue
         try:
             data = p.read_bytes()
