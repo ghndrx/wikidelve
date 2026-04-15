@@ -797,6 +797,7 @@ async def create_doc_chat_agent(kb: str, slug: str, manifest: dict):
     from app.agent_prompts import DOC_CHAT_AGENT_PROMPT
     system_prompt = DOC_CHAT_AGENT_PROMPT.format(
         autonomy_mode=manifest.get("autonomy_mode", "propose"),
+        grounding_mode=manifest.get("grounding_mode", "standard"),
         title=manifest.get("title", slug),
         doc_type=manifest.get("doc_type", "pdf"),
         brief=manifest.get("brief", ""),

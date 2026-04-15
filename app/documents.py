@@ -69,6 +69,12 @@ DOC_TYPES = {"pdf", "pptx", "docx", "md-export"}
 AUTONOMY_MODES = {"auto", "propose", "plan-first", "collab", "review-gate"}
 DEFAULT_AUTONOMY = "propose"
 
+# Grounding modes control how strictly the doc-chat agent must cite sources.
+# ``standard`` allows synthesis; ``strict`` refuses uncited factual claims
+# (NotebookLM-style). See DOC_CHAT_AGENT_PROMPT for the enforcement rules.
+GROUNDING_MODES = {"standard", "strict"}
+DEFAULT_GROUNDING = "standard"
+
 # Guardrails — markdown source should not balloon unboundedly; the
 # rendered binary is also capped so a runaway PDF doesn't eat storage.
 MAX_MARKDOWN_BYTES = 512 * 1024       # 512KB of source markdown
@@ -202,6 +208,10 @@ def _validate_manifest(manifest: dict) -> dict:
     if autonomy not in AUTONOMY_MODES:
         raise ValueError(f"autonomy_mode must be one of {sorted(AUTONOMY_MODES)}")
 
+    grounding = manifest.get("grounding_mode", DEFAULT_GROUNDING)
+    if grounding not in GROUNDING_MODES:
+        raise ValueError(f"grounding_mode must be one of {sorted(GROUNDING_MODES)}")
+
     seeds = manifest.get("seed_articles") or []
     if not isinstance(seeds, list):
         raise ValueError("seed_articles must be a list")
@@ -219,6 +229,7 @@ def _validate_manifest(manifest: dict) -> dict:
         "title": title or slug.replace("-", " ").title(),
         "doc_type": doc_type,
         "autonomy_mode": autonomy,
+        "grounding_mode": grounding,
         "brief": manifest.get("brief", "")[:4000],
         "seed_articles": seeds,
         "pinned_facts": [str(p)[:500] for p in pinned],

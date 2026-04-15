@@ -159,7 +159,15 @@
     <div class="doc-pane">
         <div class="doc-pane-header">
             <span><strong>Chat</strong> with the drafting agent</span>
-            <span style="font-size: 11px; color: var(--color-text-muted);">{{ manifest.autonomy_mode }} mode</span>
+            <span style="display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--color-text-muted);">
+                <span>{{ manifest.autonomy_mode }} mode</span>
+                <label style="display: flex; gap: 4px; align-items: center; cursor: pointer;" title="Strict mode requires every factual claim to cite a source; refuses uncited answers (NotebookLM-style).">
+                    <input type="checkbox" id="grounding-toggle"
+                        {% if manifest.grounding_mode == 'strict' %}checked{% endif %}
+                        style="margin: 0;" />
+                    <span>strict grounding</span>
+                </label>
+            </span>
         </div>
         <div class="doc-pane-body" id="chat-scroll">
             {% for evt in history if evt.type == 'turn' %}
@@ -192,6 +200,29 @@
     var sendBtn = document.getElementById('chat-send');
     var statusEl = document.getElementById('chat-status');
     var scroll = document.getElementById('chat-scroll');
+    var groundingToggle = document.getElementById('grounding-toggle');
+
+    if (groundingToggle) {
+        groundingToggle.addEventListener('change', function() {
+            var mode = groundingToggle.checked ? 'strict' : 'standard';
+            fetch('/api/documents/' + kb + '/' + slug + '/settings', {
+                method: 'PATCH',
+                headers: {'content-type': 'application/json'},
+                body: JSON.stringify({grounding_mode: mode}),
+            }).then(function(r) {
+                if (!r.ok) {
+                    groundingToggle.checked = !groundingToggle.checked;
+                    statusEl.textContent = 'grounding toggle failed';
+                } else {
+                    statusEl.textContent = 'grounding: ' + mode;
+                    setTimeout(function() { statusEl.textContent = ''; }, 2000);
+                }
+            }).catch(function() {
+                groundingToggle.checked = !groundingToggle.checked;
+                statusEl.textContent = 'grounding toggle failed';
+            });
+        });
+    }
 
     function scrollToBottom() {
         scroll.scrollTop = scroll.scrollHeight;

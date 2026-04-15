@@ -1337,6 +1337,47 @@ async def api_document_delete(kb_name: str, slug: str):
     return {"status": "deleted", "kb": kb_name, "slug": slug}
 
 
+@app.patch("/api/documents/{kb_name}/{slug}/settings")
+async def api_document_settings(kb_name: str, slug: str, body: dict):
+    """Toggle per-document knobs (autonomy_mode, grounding_mode).
+
+    Kept narrow on purpose — title/brief/seed edits would invalidate
+    version history context, so we only accept the runtime knobs that
+    affect the NEXT chat turn.
+    """
+    import json as _json
+    from app import storage
+    from app.documents import get_manifest, AUTONOMY_MODES, GROUNDING_MODES
+    manifest = get_manifest(kb_name, slug)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    changed = False
+    if "autonomy_mode" in body:
+        mode = body["autonomy_mode"]
+        if mode not in AUTONOMY_MODES:
+            raise HTTPException(status_code=400, detail=f"autonomy_mode must be one of {sorted(AUTONOMY_MODES)}")
+        manifest["autonomy_mode"] = mode
+        changed = True
+    if "grounding_mode" in body:
+        mode = body["grounding_mode"]
+        if mode not in GROUNDING_MODES:
+            raise HTTPException(status_code=400, detail=f"grounding_mode must be one of {sorted(GROUNDING_MODES)}")
+        manifest["grounding_mode"] = mode
+        changed = True
+
+    if changed:
+        storage.write_text(
+            kb_name, f"documents/{slug}/manifest.json",
+            _json.dumps(manifest, indent=2, sort_keys=True),
+        )
+    return {
+        "kb": kb_name, "slug": slug,
+        "autonomy_mode": manifest.get("autonomy_mode"),
+        "grounding_mode": manifest.get("grounding_mode"),
+    }
+
+
 @app.get("/api/documents/{kb_name}/{slug}/history")
 async def api_document_history(kb_name: str, slug: str, limit: int = 50):
     """Return the chat-turn + version history log for a document."""

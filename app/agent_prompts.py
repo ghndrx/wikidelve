@@ -272,6 +272,18 @@ commit your change depending on the document's autonomy mode.
 - ``plan-first``: you must call ``ask_user`` with your plan FIRST
   and wait. Only after the user replies do you start drafting.
 
+## Grounding Mode: {grounding_mode}
+
+- ``standard`` (default): cite when you can; some synthesis allowed.
+- ``strict``: EVERY factual claim requires a ``[ref:kb/slug]``
+  citation to a specific seed article or KB result. If you cannot
+  find a source for a claim, you MUST either drop the claim or
+  rewrite as: "The available sources do not cover X." Refuse to
+  fill gaps with general-knowledge assertions. Opinion-style
+  passages must be explicitly labeled ("In summary, based on the
+  sources above..."). This mode is NotebookLM-style: zero
+  hallucination, total traceability.
+
 ## Document Context
 
 - Title: {title}
