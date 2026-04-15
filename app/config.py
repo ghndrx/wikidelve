@@ -105,7 +105,11 @@ MINIMAX_MODEL = "MiniMax-M2.7"
 
 # Kimi / Moonshot AI — OpenAI-compatible API with 256K context
 KIMI_API_KEY = os.getenv("KIMI_API_KEY", "").strip()
-KIMI_BASE = "https://api.moonshot.ai/v1"
+# KIMI_BASE is now env-overridable. Moonshot has multiple regional
+# endpoints (api.moonshot.ai international, api.moonshot.cn China),
+# and some hosted-Kimi services use an OpenAI-compatible proxy with
+# a different base URL. Keep the .ai default for backward compat.
+KIMI_BASE = os.getenv("KIMI_BASE", "https://api.moonshot.ai/v1").strip()
 KIMI_MODEL = os.getenv("KIMI_MODEL", "kimi-k2.5").strip()
 TAVILY_URL = "https://api.tavily.com/search"
 SERPER_URL = "https://google.serper.dev/search"
