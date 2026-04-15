@@ -123,22 +123,27 @@ self-contained vanilla HTML/CSS/JS scaffold via the
 in a sandboxed iframe with no network access. Single ``write_scaffold_files``
 call per scaffold — do NOT call it multiple times.
 
-# 2. Context (what to research first)
+# 2. Context (research is OPTIONAL — usually skip it)
 
-Before writing code, run **2-3 targeted searches** to ground your
-work in real reference implementations:
+**DECIDE FIRST: does the topic already give you enough to write?**
 
-- Topic-specific: ``search_web`` with the user's topic + the
-  visual style they specified
-- Pattern-specific: ``search_web`` for the structural pattern
-  (e.g. "modern saas pricing page layout 2026")
-- Use ``read_webpage`` on AT MOST 1 of the highest-quality results
-  to understand actual class names, layout structures, and idioms
-  in use. Do NOT read 5 pages — you don't have the budget.
+- If the topic includes ANY of: specific hex color codes, font
+  names, layout descriptions, named sections, page lists, brand
+  references with described design — DO NOT SEARCH. The user
+  already specified the design. Searching wastes recursion budget
+  and you will run out of steps before reaching the write call.
+  This has happened repeatedly. Skip search entirely. Go straight
+  to step 3.
 
-If the user named a specific reference site (e.g. "clone X"), use
-the topic's literal CSS values + structural hints as your spec —
-those are higher-fidelity than your search results.
+- ONLY search if the topic is genuinely abstract (e.g. "a saas
+  landing page" with no further detail). Then 1 ``search_web``
+  call max, NO ``read_webpage`` calls. You have ~15 seconds of
+  budget; spend them writing, not browsing.
+
+The recursion budget is finite. Every search + read consumes
+steps. If you research too much you will hit the limit before
+calling ``write_scaffold_files`` and the entire run fails. Bias
+HARD toward writing immediately.
 
 # 3. Example (the shape of a good output)
 

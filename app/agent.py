@@ -407,13 +407,14 @@ async def run_scaffold_agent(
     try:
         result = await agent.ainvoke(
             {"messages": [{"role": "user", "content": user_msg}]},
-            # Multi-page scaffolds with detailed specs need more
-            # recursion than 80 — the prior limit silently
-            # truncated agents mid-plan, leaving "Let me create
-            # the scaffold..." as the final message and no actual
-            # write_scaffold_files call. 200 matches the research
-            # agent's headroom for similarly-deep loops.
-            config={"recursion_limit": 200},
+            # Recursion budget tuned through three real failures:
+            # 80 → exhausted on simple multi-file
+            # 200 → still exhausted on detailed-spec topics where
+            #       the agent over-researched
+            # 300 → headroom for stubborn over-researchers + paired
+            #       with the v3 prompt that tells spec-heavy runs
+            #       to skip search entirely
+            config={"recursion_limit": 300},
         )
         final_message = result["messages"][-1]
         content = (
