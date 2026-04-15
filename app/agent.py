@@ -389,6 +389,13 @@ async def run_scaffold_agent(
 
     agent = await create_scaffold_agent(kb=kb, topic=topic, scaffold_type=scaffold_type)
 
+    # Snapshot scaffold slugs BEFORE the agent runs so the
+    # post-run diff tells us authoritatively which slug (if any)
+    # this run produced — independent of any text-parsing on the
+    # agent's reply.
+    from app.scaffolds import list_scaffolds
+    pre_slugs = {s["slug"] for s in list_scaffolds(kb)}
+
     await db.update_job(job_id, status="agent_scaffolding")
     logger.info(
         "Scaffold agent started: job=%d kb=%s topic=%r type=%s",
@@ -422,35 +429,48 @@ async def run_scaffold_agent(
             if isinstance(final_message.content, str)
             else str(final_message.content)
         )
-        # Detect whether write_scaffold_files actually ran. The tool
-        # echoes a JSON envelope with "slug" — search the agent's
-        # full message trail (not just the final message) since
-        # final-message text often paraphrases the result. If we
-        # don't find a real slug, this is NOT a successful run —
-        # mark the job as error so the operator sees the truth and
-        # we don't pollute the listing with phantom completions.
+        # Detect whether write_scaffold_files actually ran. Two
+        # signals, in order of reliability:
+        #   1. New slug in the store that wasn't there at kickoff.
+        #      (Authoritative — if the file landed in S3, the work
+        #      happened, regardless of what the agent's message
+        #      trail says.)
+        #   2. Regex on the message trail for a "slug": "..." token.
+        #      Backup signal for when the storage backend lags.
         import json as _json, re as _re
 
+        post_slugs = {s["slug"] for s in list_scaffolds(kb)}
         slug = None
-        for msg in result.get("messages", []):
-            text = msg.content if isinstance(msg.content, str) else str(getattr(msg, "content", ""))
-            m = _re.search(r'"slug"\s*:\s*"([^"]+)"[^{}]*"preview_url"', text)
-            if m:
-                slug = m.group(1)
-                break
+        new_slugs = post_slugs - pre_slugs
+        if len(new_slugs) == 1:
+            slug = next(iter(new_slugs))
+        elif len(new_slugs) > 1:
+            # Multiple new slugs — pick the freshest by manifest's
+            # 'created' or 'updated' field. Conservative.
+            from app.scaffolds import get_manifest
+            best, best_ts = None, ""
+            for s in new_slugs:
+                m = get_manifest(kb, s) or {}
+                ts = m.get("updated") or m.get("created") or ""
+                if ts > best_ts:
+                    best, best_ts = s, ts
+            slug = best
 
         if not slug:
-            # Verify against the actual store so we don't mark a
-            # job errored when the agent did write but the message
-            # trail just doesn't echo the slug we recognise.
-            from app.scaffolds import list_scaffolds
-            recent_slugs = {s["slug"] for s in list_scaffolds(kb)}
-            # Heuristic: did anything new show up after kickoff?
-            # Without a kickoff snapshot we can't be sure, so we
-            # leave the verify pass for an operator hook later.
-            # For now, if the trail has no slug, treat as error.
+            # Fallback: scan the agent's message trail. The
+            # write_scaffold_files tool echoes JSON with both
+            # "slug" and "preview_url"; finding both adjacent
+            # confirms it's our envelope, not stray text.
+            for msg in result.get("messages", []):
+                text = msg.content if isinstance(msg.content, str) else str(getattr(msg, "content", ""))
+                m = _re.search(r'"slug"\s*:\s*"([^"]+)"[^{}]*"preview_url"', text)
+                if m:
+                    slug = m.group(1)
+                    break
+
+        if not slug:
             logger.warning(
-                "Scaffold agent finished WITHOUT calling write_scaffold_files: "
+                "Scaffold agent finished WITHOUT producing a scaffold: "
                 "job=%d kb=%s topic=%r — recursion limit exhausted or "
                 "agent gave up. Marking as error.",
                 job_id, kb, topic,
