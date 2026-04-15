@@ -1,0 +1,19 @@
+{
+  "name": "wikidelve-kimi-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@moonshot-ai/kimi-agent-sdk": "^0.1.8",
+    "express": "^4.19.2",
+    "playwright": "^1.49.0",
+    "zod": "^3.24.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

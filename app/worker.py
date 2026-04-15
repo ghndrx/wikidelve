@@ -52,8 +52,13 @@ async def scaffold_create_task(
         job_id, kb_name, topic, scaffold_type,
     )
     try:
-        from app.agent import run_scaffold_agent
-        await run_scaffold_agent(kb_name, topic, scaffold_type, job_id)
+        from app.kimi_bridge import KIMI_ENABLED
+        if KIMI_ENABLED:
+            from app.agent import run_scaffold_agent_kimi
+            await run_scaffold_agent_kimi(kb_name, topic, scaffold_type, job_id)
+        else:
+            from app.agent import run_scaffold_agent
+            await run_scaffold_agent(kb_name, topic, scaffold_type, job_id)
     except Exception as exc:
         logger.exception("Scaffold agent crashed for job %d", job_id)
         await db.update_job(job_id, status="error", error=f"Scaffold crash: {exc}")

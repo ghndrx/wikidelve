@@ -46,6 +46,11 @@ services:
       - REDIS_PORT=6379
       - AUTO_DISCOVERY_ENABLED=${AUTO_DISCOVERY_ENABLED:-false}
       - SERPER_CALLS_PER_JOB_ESTIMATE=${SERPER_CALLS_PER_JOB_ESTIMATE:-8}
+      - KIMI_BRIDGE_ENABLED=${KIMI_BRIDGE_ENABLED:-false}
+      - KIMI_BRIDGE_URL=${KIMI_BRIDGE_URL:-http://kimi-bridge:5555}
+      - KIMI_BRIDGE_SECRET=${KIMI_BRIDGE_SECRET:-}
+      - KIMI_WORKDIR_HOST=/kb/kimi-workdirs
+      - KIMI_WORKDIR_CONTAINER=/workdirs
     depends_on:
       redis:
         condition: service_started
@@ -92,6 +97,32 @@ services:
     mem_limit: 512m
     cpus: 1.0
     restart: unless-stopped
+
+  kimi-bridge:
+    container_name: kb-kimi-bridge
+    build:
+      context: ./kimi-bridge
+      dockerfile: Dockerfile
+    environment:
+      - PORT=5555
+      - KIMI_BRIDGE_SECRET=${KIMI_BRIDGE_SECRET:-}
+      - KIMI_MODEL=${KIMI_MODEL:-kimi-latest}
+      - KIMI_TURN_TIMEOUT_MS=${KIMI_TURN_TIMEOUT_MS:-1500000}
+      - WIKIDELVE_APP_URL=http://app:8888
+    volumes:
+      # Persist /login state on host. kimi-cli reads ~/.kimi/credentials/.
+      - ${HOME}/.kimi:/root/.kimi
+      # Shared scaffold workdir: app/worker writes prompt + kimi writes files here.
+      - ./data/kimi-workdirs:/workdirs
+    mem_limit: 1g
+    cpus: 2.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5555/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   ts-state:

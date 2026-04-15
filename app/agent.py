@@ -542,6 +542,126 @@ async def run_scaffold_agent(
         raise
 
 
+async def run_scaffold_agent_kimi(
+    kb: str, topic: str, scaffold_type: str, job_id: int,
+) -> dict:
+    """Kimi-backed scaffold runner.
+
+    Hands the job to kimi-cli through the bridge sidecar: we allocate
+    an ephemeral workdir, let kimi write files into it with its own
+    file tools, then ingest the result via scaffolds.create_scaffold.
+    No LangChain, no Minimax — used when KIMI_BRIDGE_ENABLED=true.
+    """
+    from app import db
+    from app import kimi_bridge
+    from app.scaffolds import SCAFFOLD_TYPES, create_scaffold
+    import json as _json
+
+    if scaffold_type not in SCAFFOLD_TYPES:
+        scaffold_type = "other"
+
+    await db.update_job(job_id, status="agent_scaffolding")
+    logger.info(
+        "Kimi scaffold agent started: job=%d kb=%s topic=%r type=%s",
+        job_id, kb, topic, scaffold_type,
+    )
+
+    host_dir, container_dir = kimi_bridge.make_workdir(prefix=f"scaffold-{job_id}")
+    prompt = (
+        f"Build a '{scaffold_type}' static web scaffold for this topic: {topic}\n\n"
+        f"Working directory: {container_dir} — write files directly here "
+        f"with your built-in file tools.\n\n"
+        f"You have six tools available. USE THEM — they are the single "
+        f"biggest quality lever over just writing from memory:\n\n"
+        f"  RESEARCH (do FIRST, before writing any code):\n"
+        f"  1. search_kb({{query, kb}}) — search our internal wiki for "
+        f"existing patterns. Start here — we may already have research on "
+        f"this topic.\n"
+        f"  2. search_web({{query}}) — Google via Serper. Find 2-3 "
+        f"best-in-class reference sites for this scaffold type.\n"
+        f"  3. read_webpage({{url}}) — pull the full readable text from a "
+        f"URL. Use to study a specific reference in depth.\n\n"
+        f"  VISUAL (use DURING build):\n"
+        f"  4. browser_screenshot({{url}}) — screenshot the reference sites "
+        f"you found so you can match their visual language.\n"
+        f"  5. browser_snapshot({{url}}) — accessibility tree + links from a "
+        f"reference page; understand its information architecture.\n\n"
+        f"  SELF-VALIDATE (run AFTER writing files):\n"
+        f"  6. browser_validate_local({{path}}) — render YOUR OWN output in "
+        f"Chromium. Screenshot + console errors come back. If it looks bad "
+        f"or has errors, fix and re-validate. Iterate until polished.\n\n"
+        f"Rules:\n"
+        f"- Vanilla HTML / CSS / JS only. No frameworks, no bundlers, no "
+        f"build step. Must load by opening index.html directly.\n"
+        f"- Minimum: index.html + styles.css + app.js. Add more pages if "
+        f"the topic warrants it.\n"
+        f"- Total size under 2 MB, under 50 files.\n"
+        f"- No remote fonts/CDNs that break offline preview — inline or drop.\n"
+        f"- Stop when the scaffold is complete and you've validated it "
+        f"renders cleanly. Don't keep polishing forever."
+    )
+
+    try:
+        bridge_result = await kimi_bridge.run_agent(
+            prompt=prompt, workdir_container=container_dir,
+        )
+    except kimi_bridge.KimiBridgeError as exc:
+        logger.exception("kimi-bridge call failed: job=%d", job_id)
+        await db.update_job(job_id, status="error", error=f"kimi-bridge: {exc}")
+        kimi_bridge.cleanup_workdir(host_dir)
+        raise
+
+    status = bridge_result.get("status", "unknown")
+    transcript_parts = [
+        p.get("text", "") for p in bridge_result.get("transcript", [])
+        if p.get("kind") == "text"
+    ]
+    narrative = "\n".join(transcript_parts).strip()
+
+    files = kimi_bridge.walk_workdir(host_dir)
+    kimi_bridge.cleanup_workdir(host_dir)
+
+    if not files:
+        logger.warning(
+            "Kimi scaffold finished without writing files: job=%d status=%s",
+            job_id, status,
+        )
+        await db.update_job(
+            job_id, status="error",
+            error=f"kimi produced no files (turn status={status})",
+            content=narrative or None,
+        )
+        return bridge_result
+
+    # Build a minimal manifest; scaffolds.create_scaffold validates +
+    # fills in the rest.
+    manifest = {
+        "topic": topic,
+        "scaffold_type": scaffold_type,
+        "framework": "vanilla",
+        "description": narrative[:500] if narrative else f"{scaffold_type} scaffold for {topic}",
+    }
+    try:
+        slug = create_scaffold(kb=kb, manifest=manifest, files=files)
+    except Exception as exc:
+        logger.exception("create_scaffold failed after kimi run: job=%d", job_id)
+        await db.update_job(
+            job_id, status="error", error=f"ingest failed: {exc}",
+            content=narrative or None,
+        )
+        raise
+
+    await db.update_job(
+        job_id, status="complete", content=narrative,
+        source_params=_json.dumps({
+            "scaffold_slug": slug, "scaffold_type": scaffold_type,
+            "kb": kb, "topic": topic, "backend": "kimi",
+        }),
+    )
+    logger.info("Kimi scaffold complete: job=%d slug=%s files=%d", job_id, slug, len(files))
+    return bridge_result
+
+
 async def create_scaffold_extend_agent(kb: str, slug: str, page_path: str, brief: str):
     """Build an agent specialised for adding a single sibling page
     to an existing scaffold. Tighter tool surface than the full

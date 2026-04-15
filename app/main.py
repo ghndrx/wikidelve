@@ -118,6 +118,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="KB Service", version="2.0.0", lifespan=lifespan)
 
+from app.internal_tools import router as _internal_tools_router
+app.include_router(_internal_tools_router)
+
 # --- Rate limiting ---
 def _rate_limit_key(request: Request) -> str:
     """Compose the rate-limit bucket from (client IP, KB).
@@ -216,6 +219,11 @@ async def auth_middleware(request: Request, call_next):
     Uses ``hmac.compare_digest`` for a constant-time comparison so the
     key length / contents can't be probed via a timing side-channel.
     """
+    # Internal endpoints (kimi-bridge callbacks) authenticate via their
+    # own x-kimi-bridge-secret header. Skip the Bearer-token gate so the
+    # sidecar doesn't need both credentials.
+    if request.url.path.startswith("/api/internal/"):
+        return await call_next(request)
     if API_KEY and request.method in ("POST", "PUT", "DELETE", "PATCH"):
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer "):
