@@ -1136,6 +1136,35 @@ async def view_scaffold_file(kb_name: str, slug: str, rel_path: str):
 
     ext = rel_path.rsplit(".", 1)[-1].lower() if "." in rel_path else ""
     mime = _SCAFFOLD_MIMES.get(ext, "text/plain; charset=utf-8")
+
+    # Inject a tiny postMessage listener into every sandbox HTML
+    # response so the parent viewer can live-override :root CSS custom
+    # properties (design-token editor). Inert when no message arrives,
+    # so it has zero effect for users who open the sandbox directly.
+    if ext == "html":
+        shim = (
+            "<script>(function(){"
+            "window.addEventListener('message',function(e){"
+            "var d=e.data||{};"
+            "if(d.type==='wd:token-override'&&d.tokens){"
+            "var r=document.documentElement;"
+            "Object.keys(d.tokens).forEach(function(k){"
+            "r.style.setProperty('--'+k,d.tokens[k]);});"
+            "}else if(d.type==='wd:token-reset'){"
+            "var r=document.documentElement;"
+            "(d.keys||[]).forEach(function(k){r.style.removeProperty('--'+k);});"
+            "}});"
+            "window.parent&&window.parent.postMessage({type:'wd:ready',path:"
+            + json.dumps(rel_path) + "},'*');"
+            "})();</script>"
+        )
+        # Inject before </head> if possible, else prepend to body.
+        lower = content.lower()
+        idx = lower.find("</head>")
+        if idx >= 0:
+            content = content[:idx] + shim + content[idx:]
+        else:
+            content = shim + content
     # CSP: no network, no parent, no inline-except-unsafe-for-scaffold.
     # 'unsafe-inline' is needed because scaffolds bundle small inline
     # <style>/<script> blocks; network is closed so this can't phone

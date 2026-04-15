@@ -30,17 +30,30 @@
     {% if manifest.scaffold_type in visual_types and manifest.entrypoint.endswith('.html') %}
     <section style="margin: 24px 0;">
         <h2 style="font-size: 16px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted);">Preview</h2>
-        <div style="border: 1px solid var(--color-border); border-radius: 8px; overflow: hidden; background: #fff;">
-            <iframe
-                src="/sandbox/{{ kb }}/{{ slug }}/"
-                sandbox="allow-scripts"
-                style="width: 100%; height: 600px; border: 0; display: block;"
-                title="Scaffold preview"
-                loading="lazy">
-            </iframe>
+        <div style="display: grid; grid-template-columns: 1fr 280px; gap: 12px;">
+            <div style="border: 1px solid var(--color-border); border-radius: 8px; overflow: hidden; background: #fff;">
+                <iframe
+                    id="scaffold-preview-iframe"
+                    src="/sandbox/{{ kb }}/{{ slug }}/"
+                    sandbox="allow-scripts"
+                    style="width: 100%; height: 600px; border: 0; display: block;"
+                    title="Scaffold preview"
+                    loading="lazy">
+                </iframe>
+            </div>
+            <aside id="token-editor" style="border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); padding: 12px; max-height: 600px; overflow-y: auto; font-size: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <strong style="font-size: 13px;">Design tokens</strong>
+                    <button id="token-reset" class="wiki-btn" style="font-size: 11px; padding: 2px 8px;">Reset</button>
+                </div>
+                <div id="token-editor-body" style="font-size: 12px; color: var(--color-text-muted);">
+                    Parsing styles.css…
+                </div>
+            </aside>
         </div>
         <p style="font-size: 12px; color: var(--color-text-muted); margin-top: 6px;">
             Sandboxed iframe. No network access. No parent-window access.
+            Token edits are live preview only — refresh to discard.
             <a href="/sandbox/{{ kb }}/{{ slug }}/" target="_blank" rel="noopener">
                 Open preview in new tab →
             </a>
@@ -132,6 +145,98 @@
 
     // Copy button: pulls the already-loaded content, falls back to
     // fetch if the user hasn't expanded that file yet.
+    // Design token editor: parse :root from styles.css, render inputs,
+    // push changes to the iframe via postMessage (see the shim the
+    // sandbox handler injects into every HTML response).
+    var tokenIframe = document.getElementById('scaffold-preview-iframe');
+    var tokenBody = document.getElementById('token-editor-body');
+    var tokenReset = document.getElementById('token-reset');
+    var activeTokens = {};
+
+    function parseTokens(cssText) {
+        var rootMatch = cssText.match(/:root\s*\{([^}]*)\}/);
+        if (!rootMatch) return [];
+        var tokens = [];
+        var re = /--([a-z0-9-]+)\s*:\s*([^;]+);/gi;
+        var m;
+        while ((m = re.exec(rootMatch[1])) !== null) {
+            tokens.push({name: m[1], value: m[2].trim()});
+        }
+        return tokens;
+    }
+
+    function pickInputType(name, value) {
+        if (/^color/.test(name) && /^#|^rgb|^hsl/.test(value)) return 'color';
+        return 'text';
+    }
+
+    function postTokens(patch) {
+        if (!tokenIframe || !tokenIframe.contentWindow) return;
+        tokenIframe.contentWindow.postMessage(
+            {type: 'wd:token-override', tokens: patch}, '*'
+        );
+    }
+
+    function renderTokenEditor(tokens) {
+        if (!tokens.length) {
+            tokenBody.textContent = 'No :root tokens found.';
+            return;
+        }
+        tokenBody.textContent = '';
+        var groups = {};
+        tokens.forEach(function(t) {
+            var prefix = t.name.split('-')[0];
+            (groups[prefix] = groups[prefix] || []).push(t);
+        });
+        Object.keys(groups).forEach(function(prefix) {
+            var h = document.createElement('div');
+            h.textContent = prefix;
+            h.style.cssText = 'font-weight:600;text-transform:uppercase;letter-spacing:0.05em;font-size:10px;margin:10px 0 4px;';
+            tokenBody.appendChild(h);
+            groups[prefix].forEach(function(t) {
+                var row = document.createElement('label');
+                row.style.cssText = 'display:grid;grid-template-columns:1fr 90px;gap:6px;align-items:center;margin-bottom:4px;';
+                var lbl = document.createElement('span');
+                lbl.textContent = '--' + t.name;
+                lbl.style.cssText = 'font-family:var(--font-mono);font-size:10px;overflow:hidden;text-overflow:ellipsis;';
+                var inp = document.createElement('input');
+                inp.type = pickInputType(t.name, t.value);
+                inp.value = t.value;
+                inp.style.cssText = 'width:100%;font-size:11px;padding:2px 4px;border:1px solid var(--color-border);border-radius:3px;';
+                inp.addEventListener('input', function() {
+                    activeTokens[t.name] = inp.value;
+                    var patch = {};
+                    patch[t.name] = inp.value;
+                    postTokens(patch);
+                });
+                row.appendChild(lbl);
+                row.appendChild(inp);
+                tokenBody.appendChild(row);
+            });
+        });
+    }
+
+    if (tokenBody && tokenIframe) {
+        fetch('/sandbox/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/styles.css', {cache: 'no-store'})
+            .then(function(r) { return r.ok ? r.text() : ''; })
+            .then(function(css) { renderTokenEditor(parseTokens(css)); })
+            .catch(function() { tokenBody.textContent = 'styles.css not found'; });
+    }
+
+    if (tokenReset) {
+        tokenReset.addEventListener('click', function() {
+            var keys = Object.keys(activeTokens);
+            if (!keys.length || !tokenIframe || !tokenIframe.contentWindow) return;
+            tokenIframe.contentWindow.postMessage(
+                {type: 'wd:token-reset', keys: keys}, '*'
+            );
+            activeTokens = {};
+            fetch('/sandbox/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/styles.css', {cache: 'no-store'})
+                .then(function(r) { return r.text(); })
+                .then(function(css) { renderTokenEditor(parseTokens(css)); });
+        });
+    }
+
     document.querySelectorAll('.copy-file-btn').forEach(function(btn) {
         btn.addEventListener('click', async function(ev) {
             ev.preventDefault();
