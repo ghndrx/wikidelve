@@ -3,62 +3,290 @@
 {% block title %}Scaffolds{% endblock %}
 
 {% block content %}
-<section class="wiki-article">
-    <header class="article-header">
+<style nonce="{{ csp_nonce() }}">
+.scf-page-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 24px;
+    margin-bottom: 16px;
+}
+.scf-page-head h1 { margin: 0 0 6px 0; }
+.scf-page-head p { color: var(--color-text-secondary); margin: 0; max-width: 640px; }
+
+.scf-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--color-bg);
+    padding: 12px 0;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+}
+.scf-search {
+    flex: 1 1 240px;
+    min-width: 200px;
+    padding: 8px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: 14px;
+}
+.scf-sort {
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: 13px;
+}
+.scf-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.scf-filter {
+    padding: 4px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.scf-filter:hover { background: var(--color-surface-alt); }
+.scf-filter.active {
+    background: var(--color-text);
+    color: var(--color-bg);
+    border-color: var(--color-text);
+}
+.scf-filter-count {
+    margin-left: 4px;
+    opacity: 0.6;
+    font-size: 11px;
+}
+
+.scf-section {
+    margin-bottom: 32px;
+}
+.scf-section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 12px;
+}
+.scf-section-title {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-muted);
+    font-weight: 600;
+    margin: 0;
+}
+.scf-section-count {
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
+.scf-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+}
+.scf-card {
+    display: flex;
+    flex-direction: column;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-surface);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.1s, transform 0.1s;
+}
+.scf-card:hover {
+    border-color: var(--color-text);
+    transform: translateY(-1px);
+}
+.scf-card-meta {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-text-muted);
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+.scf-card-title {
+    font-weight: 600;
+    font-size: 14px;
+    line-height: 1.3;
+    margin: 0 0 6px 0;
+    color: var(--color-text);
+}
+.scf-card-foot {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    margin-top: auto;
+    padding-top: 6px;
+    display: flex;
+    gap: 8px;
+}
+.scf-card-foot .scf-dot { opacity: 0.4; }
+
+.scf-empty {
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--color-text-muted);
+    border: 1px dashed var(--color-border);
+    border-radius: 8px;
+}
+
+.scf-no-results {
+    padding: 24px;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 14px;
+}
+</style>
+
+<div class="scf-page-head">
+    <div>
         <h1>Scaffolds</h1>
-        <p style="color: var(--color-text-secondary);">
-            Plug-and-play templates researched and synthesized by the scaffold agent.
-            Copy the files into your own project or preview them in a sandboxed iframe.
-        </p>
-    </header>
+        <p>Plug-and-play templates researched and synthesized by the scaffold agent. Copy the files into your own project or preview them in a sandboxed iframe.</p>
+    </div>
+    <div style="font-size: 13px; color: var(--color-text-muted); white-space: nowrap;">
+        <strong id="scf-total-count">{{ items|length }}</strong> total
+    </div>
+</div>
 
-    <div style="margin: 16px 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-        <label style="font-size: 12px; color: var(--color-text-muted);">Filter:</label>
-        <button class="wiki-btn scaffold-filter active" data-type="all" style="font-size: 12px;">All</button>
+<div class="scf-toolbar">
+    <input type="search" class="scf-search" id="scf-search" placeholder="Search by title..." />
+    <select class="scf-sort" id="scf-sort">
+        <option value="newest">Newest first</option>
+        <option value="oldest">Oldest first</option>
+        <option value="alpha">A → Z</option>
+        <option value="alpha-rev">Z → A</option>
+    </select>
+    <div class="scf-filters" id="scf-filters">
+        <button class="scf-filter active" data-type="all">All<span class="scf-filter-count" id="scf-count-all">{{ items|length }}</span></button>
         {% for t in types %}
-        <button class="wiki-btn scaffold-filter" data-type="{{ t }}" style="font-size: 12px;">{{ t }}</button>
+        <button class="scf-filter" data-type="{{ t }}">{{ t }}<span class="scf-filter-count" id="scf-count-{{ t }}">0</span></button>
         {% endfor %}
     </div>
+</div>
 
-    <div id="scaffold-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 16px;">
-        {% for s in items %}
-        <a href="/scaffolds/{{ kb }}/{{ s.slug }}" class="scaffold-card" data-type="{{ s.scaffold_type }}"
-           style="display: block; padding: 16px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); text-decoration: none; color: inherit;">
-            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); margin-bottom: 6px;">
-                {{ s.scaffold_type }} · {{ s.framework }}
-            </div>
-            <div style="font-weight: 600; margin-bottom: 4px;">{{ s.title }}</div>
-            <div style="font-size: 12px; color: var(--color-text-muted);">
-                {{ s.created }}
-            </div>
-        </a>
-        {% else %}
-        <div style="grid-column: 1 / -1; padding: 32px; text-align: center; color: var(--color-text-muted); border: 1px dashed var(--color-border); border-radius: 8px;">
-            <p>No scaffolds yet for KB <code>{{ kb }}</code>.</p>
-            <p style="font-size: 13px; margin-top: 8px;">
-                Create one via
-                <code>POST /api/scaffolds/{{ kb }}/create</code>
-                with <code>{topic, scaffold_type}</code>.
-            </p>
+{% if items %}
+<div id="scf-sections">
+    {# Server renders one big grid; client-side regroups by type when filter changes. #}
+    <div class="scf-section" data-section="all">
+        <div class="scf-grid" id="scf-grid">
+            {% for s in items %}
+            <a href="/scaffolds/{{ kb }}/{{ s.slug }}" class="scf-card" data-type="{{ s.scaffold_type }}" data-title-lower="{{ s.title|lower }}" data-created="{{ s.created or '' }}">
+                <div class="scf-card-meta">{{ s.scaffold_type }} · {{ s.framework }}</div>
+                <div class="scf-card-title">{{ s.title }}</div>
+                <div class="scf-card-foot">
+                    <span>{{ s.created }}</span>
+                    {% if s.preview_type %}<span class="scf-dot">·</span><span>{{ s.preview_type }}</span>{% endif %}
+                </div>
+            </a>
+            {% endfor %}
         </div>
-        {% endfor %}
     </div>
-</section>
+</div>
+<div class="scf-no-results" id="scf-no-results" style="display: none;">
+    No scaffolds match your filters.
+</div>
+{% else %}
+<div class="scf-empty">
+    <p>No scaffolds yet for KB <code>{{ kb }}</code>.</p>
+    <p style="font-size: 13px; margin-top: 8px;">
+        Create one via <code>POST /api/scaffolds/{{ kb }}/create</code> with <code>{topic, scaffold_type}</code>.
+    </p>
+</div>
+{% endif %}
 
 <script nonce="{{ csp_nonce() }}">
 (function() {
-    var buttons = document.querySelectorAll('.scaffold-filter');
-    var cards = document.querySelectorAll('.scaffold-card');
-    buttons.forEach(function(btn) {
+    var grid = document.getElementById('scf-grid');
+    if (!grid) return;
+    var cards = Array.prototype.slice.call(grid.children);
+    var search = document.getElementById('scf-search');
+    var sort = document.getElementById('scf-sort');
+    var filterButtons = document.querySelectorAll('.scf-filter');
+    var noResults = document.getElementById('scf-no-results');
+    var totalCount = document.getElementById('scf-total-count');
+
+    var state = { type: 'all', q: '', sort: 'newest' };
+
+    // Populate per-type counts in filter buttons.
+    var typeCounts = {};
+    cards.forEach(function(c) {
+        var t = c.dataset.type || 'other';
+        typeCounts[t] = (typeCounts[t] || 0) + 1;
+    });
+    Object.keys(typeCounts).forEach(function(t) {
+        var el = document.getElementById('scf-count-' + t);
+        if (el) el.textContent = typeCounts[t];
+    });
+
+    function compareCards(a, b) {
+        var ad = a.dataset.created || '';
+        var bd = b.dataset.created || '';
+        var at = a.dataset.titleLower || '';
+        var bt = b.dataset.titleLower || '';
+        switch (state.sort) {
+            case 'oldest':   return ad < bd ? -1 : ad > bd ? 1 : 0;
+            case 'alpha':    return at < bt ? -1 : at > bt ? 1 : 0;
+            case 'alpha-rev':return at < bt ? 1 : at > bt ? -1 : 0;
+            case 'newest':
+            default:         return ad < bd ? 1 : ad > bd ? -1 : 0;
+        }
+    }
+
+    function render() {
+        var visible = 0;
+        // Sort cards in place.
+        cards.slice().sort(compareCards).forEach(function(c) {
+            grid.appendChild(c); // re-append in sorted order
+            var matchType = state.type === 'all' || c.dataset.type === state.type;
+            var matchQuery = !state.q || c.dataset.titleLower.indexOf(state.q) !== -1;
+            if (matchType && matchQuery) {
+                c.style.display = '';
+                visible++;
+            } else {
+                c.style.display = 'none';
+            }
+        });
+        if (totalCount) totalCount.textContent = visible;
+        if (noResults) noResults.style.display = visible === 0 ? '' : 'none';
+    }
+
+    search.addEventListener('input', function() {
+        state.q = search.value.trim().toLowerCase();
+        render();
+    });
+    sort.addEventListener('change', function() {
+        state.sort = sort.value;
+        render();
+    });
+    filterButtons.forEach(function(btn) {
         btn.addEventListener('click', function() {
-            var t = btn.dataset.type;
-            buttons.forEach(function(b) { b.classList.remove('active'); });
+            filterButtons.forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
-            cards.forEach(function(c) {
-                c.style.display = (t === 'all' || c.dataset.type === t) ? '' : 'none';
-            });
+            state.type = btn.dataset.type;
+            render();
         });
     });
+
+    render();
 })();
 </script>
 {% endblock %}
