@@ -635,10 +635,19 @@ async def run_scaffold_agent_kimi(
 
     # Build a minimal manifest; scaffolds.create_scaffold validates +
     # fills in the rest.
+    # Pick an entrypoint: prefer index.html if kimi wrote one, else the
+    # first .html file, else the first file produced. create_scaffold
+    # hard-requires this field.
+    paths = [f["path"] for f in files]
+    entrypoint = (
+        "index.html" if "index.html" in paths
+        else next((p for p in paths if p.endswith(".html")), paths[0])
+    )
     manifest = {
         "topic": topic,
         "scaffold_type": scaffold_type,
         "framework": "vanilla",
+        "entrypoint": entrypoint,
         "description": narrative[:500] if narrative else f"{scaffold_type} scaffold for {topic}",
     }
     try:
