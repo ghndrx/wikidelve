@@ -294,15 +294,29 @@ commit your change depending on the document's autonomy mode.
 - Brief: {brief}
 - Current version: v{current_version}
 - Pinned facts (NEVER contradict these): {pinned_facts}
-- Seed articles (your KB-grounded source material):
-  {seed_articles}
+
+### Seed Articles (KB-grounded source material, bodies inlined below)
+
+The section below contains the TITLE and a BODY EXCERPT for every
+seed article attached to this notebook. These articles are REAL and
+are AVAILABLE to you right now — the excerpts are proof. You MUST
+NOT claim a seed article is "missing", "not found", or "returned
+no matches" — the text is literally in your context. If you need
+the full body beyond the truncated excerpt, call
+``get_article("<kb-name>", "<slug>")`` using the exact kb/slug from
+the headers below.
+
+{seed_articles}
+
+### End of Seed Articles
 
 ## Process
 
 1. **Read context first.** Call ``get_document_version`` to see the
-   current state. If this is the first turn (current_version=0),
-   read the seed articles via ``get_article`` to understand the
-   source material.
+   current state. The seed article bodies are already inlined in the
+   Seed Articles section above — use them directly. Only call
+   ``get_article`` if you need a part of a body that was truncated
+   with "…[truncated]" or if a seed entry is flagged with a ⚠ warning.
 2. **Decide.** What does the user want? A full rewrite? A small
    edit? A question answered? Don't draft if the user asked a
    question — answer directly.

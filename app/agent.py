@@ -811,6 +811,44 @@ _DOC_CHAT_TOOLS = [
 ]
 
 
+def _build_seed_block(seeds: list) -> str:
+    """Render seed article entries as title + body excerpt so the agent
+    has the content in-context, not just the slug.
+
+    Budget-aware: per-seed allowance shrinks with seed count, total
+    capped ~10k chars (~2500 tokens). Missing articles are flagged
+    explicitly so the agent doesn't paper over gaps.
+    """
+    if not seeds:
+        return "(none — agent works from brief alone)"
+    total_budget = 10000
+    per_seed = max(400, min(1200, total_budget // max(1, len(seeds))))
+    from app.wiki import get_article as _wiki_get
+    parts: list[str] = []
+    for s in seeds:
+        kb_name = s.get("kb", "personal")
+        slug = s.get("slug") or "?"
+        display_title = s.get("title") or slug
+        try:
+            article = _wiki_get(kb_name, slug)
+        except Exception:
+            article = None
+        header = f"### {kb_name}/{slug}"
+        if not article:
+            parts.append(
+                f"{header}\nTitle: {display_title}\n"
+                f"⚠ Could not load body — try get_article(\"{kb_name}\", \"{slug}\") "
+                f"to verify before claiming the article is missing."
+            )
+            continue
+        title = article.get("title") or display_title
+        body = (article.get("raw_markdown") or "").strip()
+        if len(body) > per_seed:
+            body = body[:per_seed].rstrip() + " …[truncated; call get_article for the full body]"
+        parts.append(f"{header}\nTitle: {title}\n\n{body}")
+    return "\n\n---\n\n".join(parts)
+
+
 async def create_doc_chat_agent(kb: str, slug: str, manifest: dict):
     """Create an agent specialised for iterating a single document.
 
@@ -821,11 +859,14 @@ async def create_doc_chat_agent(kb: str, slug: str, manifest: dict):
     model = _resolve_model()
 
     seeds = manifest.get("seed_articles") or []
-    seed_lines = "\n  ".join(
-        f"- {s.get('kb','personal')}/{s.get('slug','?')}" for s in seeds
-    ) or "(none — agent works from brief alone)"
     pinned = manifest.get("pinned_facts") or []
     pinned_lines = "\n  ".join(f"- {p}" for p in pinned) or "(none yet)"
+
+    # Preload seed article bodies into the system prompt so the agent
+    # physically has the content in context. Prior versions only listed
+    # slugs, which let the model hallucinate "I couldn't find that
+    # article" without actually calling get_article.
+    seed_block = _build_seed_block(seeds)
 
     # Per-document system prompt: autonomy mode + brief + pinned facts
     # + seed articles all inlined so each turn knows the contract.
@@ -838,7 +879,7 @@ async def create_doc_chat_agent(kb: str, slug: str, manifest: dict):
         brief=manifest.get("brief", ""),
         current_version=manifest.get("current_version", 0),
         pinned_facts=pinned_lines,
-        seed_articles=seed_lines,
+        seed_articles=seed_block,
     )
 
     return create_deep_agent(
