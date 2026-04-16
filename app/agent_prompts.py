@@ -275,14 +275,17 @@ commit your change depending on the document's autonomy mode.
 ## Grounding Mode: {grounding_mode}
 
 - ``standard`` (default): cite when you can; some synthesis allowed.
-- ``strict``: EVERY factual claim requires a ``[ref:kb/slug]``
-  citation to a specific seed article or KB result. If you cannot
-  find a source for a claim, you MUST either drop the claim or
-  rewrite as: "The available sources do not cover X." Refuse to
-  fill gaps with general-knowledge assertions. Opinion-style
-  passages must be explicitly labeled ("In summary, based on the
-  sources above..."). This mode is NotebookLM-style: zero
-  hallucination, total traceability.
+- ``strict``: EVERY factual claim requires a
+  ``[ref:<kb-name>/<article-slug>]`` citation to a specific seed
+  article or KB result. Use the real kb name and slug from the
+  Seed articles list below — NEVER write the literal words ``kb``
+  or ``slug`` inside a citation. If you cannot find a source for
+  a claim, you MUST either drop the claim or rewrite as: "The
+  available sources do not cover X." Refuse to fill gaps with
+  general-knowledge assertions. Opinion-style passages must be
+  explicitly labeled ("In summary, based on the sources above...").
+  This mode is NotebookLM-style: zero hallucination, total
+  traceability.
 
 ## Document Context
 
@@ -312,8 +315,12 @@ commit your change depending on the document's autonomy mode.
    block code, links. Keep it tight: a one-pager should be ONE
    page when rendered (~400-600 words). A PRD can be longer.
 5. **Cite.** When you reference a KB article inline, use a
-   shortlink: ``[ref:kb/slug]`` — the renderer expands these to
-   numbered citations + a References section at the bottom.
+   shortlink ``[ref:<kb-name>/<article-slug>]`` — the renderer
+   expands these to numbered citations + a References section at
+   the bottom. Always substitute the real kb/slug from the Seed
+   articles list above (e.g. ``[ref:personal/some-real-slug]``).
+   Never emit the placeholder words ``kb`` or ``slug`` verbatim —
+   a literal ``[ref:<kb>/<slug>]`` will render as a broken citation.
 6. **Propose / commit.** Per the autonomy mode above. Include a
    1-2 sentence ``summary`` explaining what you changed and why.
 
@@ -324,6 +331,10 @@ commit your change depending on the document's autonomy mode.
   the seed articles or web suggest otherwise.
 - Never invent a citation. If you don't have a real source for a
   claim, write the claim without a citation rather than fabricate.
+- A citation ``[ref:X/Y]`` is only valid if X is a real kb name
+  (e.g. ``personal``) and Y is a real article slug from the Seed
+  articles list or a fresh ``search_kb`` result. The literal
+  string ``[ref:<kb>/<slug>]`` is NOT a citation — it's a syntax hint.
 - Don't add fluff. If the user asks for something shorter, make it
   shorter — don't pad to feel substantial.
 - If you're unsure, use ``ask_user`` to clarify rather than guess.
@@ -352,13 +363,13 @@ Write a one-page briefing document from the current source material.
 Structure: TL;DR (3 bullets) → Key findings (3-5 headed sections of
 2-3 sentences each) → Open questions → Sources.
 Tone: crisp, executive-ready, no marketing fluff. 400-600 words.
-Every factual claim MUST cite [ref:kb/slug] to the seed articles.
+Every factual claim MUST cite [ref:<kb>/<slug>] to the seed articles.
 """,
     "faq": """\
 Turn the current source material into an FAQ (8-15 Q&A pairs).
 Questions should be the ones a new reader would actually ask, in
 order of importance. Answers: 1-3 sentences each, always with
-[ref:kb/slug] citations. Cover both "what" and "why". Group into
+[ref:<kb>/<slug>] citations. Cover both "what" and "why". Group into
 sections with ## headers (Basics, Deep dive, Edge cases).
 """,
     "study-guide": """\
@@ -370,7 +381,7 @@ citations) → Worked examples → Review questions (without answers)
     "timeline": """\
 Extract a chronological timeline from the sources. Format: a ##
 year header per year (or decade if sources span widely), bullets
-under each listing what happened, with [ref:kb/slug] citations.
+under each listing what happened, with [ref:<kb>/<slug>] citations.
 Lead with a 2-3 sentence framing paragraph. End with "Ongoing" for
 present-tense developments. If sources lack dates, say so; do not
 invent them.

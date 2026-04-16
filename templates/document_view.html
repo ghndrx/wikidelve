@@ -259,6 +259,96 @@
 .onboarding-step.done .onboarding-step-marker { background: rgba(40,160,80,0.25); }
 .onboarding-step.current .onboarding-step-marker { background: rgba(6,102,204,0.22); }
 .onboarding-arrow { color: var(--color-text-muted); font-size: 11px; }
+/* Citation popover: click a pill to see title + snippet + actions
+   without leaving the chat. Keeps reading flow intact. */
+.citation-popover {
+    position: fixed;
+    z-index: 1100;
+    width: 340px;
+    max-width: calc(100vw - 24px);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.16);
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--color-text);
+    display: none;
+}
+.citation-popover.open { display: block; }
+.citation-popover-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.citation-popover-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+.citation-popover-badge {
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 8px;
+    white-space: nowrap;
+}
+.citation-popover-badge.attached { background: rgba(40,160,80,0.14); color: #1e7a45; }
+.citation-popover-badge.resolved { background: rgba(200,140,0,0.14); color: #9a6b00; }
+.citation-popover-badge.broken   { background: rgba(200,50,50,0.12); color: #b02a2a; }
+.citation-popover-badge.unknown  { background: var(--color-surface-alt); color: var(--color-text-muted); }
+.citation-popover-slug {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-muted);
+    margin-bottom: 8px;
+    word-break: break-all;
+}
+.citation-popover-snippet {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    max-height: 100px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+    padding: 6px 8px;
+    background: var(--color-surface-alt);
+    border-radius: 4px;
+    line-height: 1.45;
+}
+.citation-popover-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.citation-popover-actions .wiki-btn {
+    font-size: 12px;
+    padding: 4px 10px;
+    flex: 1 0 auto;
+}
+.citation-popover-actions .wiki-btn.primary {
+    background: var(--color-accent, #06c);
+    color: #fff;
+    border-color: var(--color-accent, #06c);
+}
+.citation-popover-actions .wiki-btn.danger {
+    color: #b02a2a;
+    border-color: rgba(200,50,50,0.35);
+}
+.citation-popover-close {
+    background: none;
+    border: 0;
+    font-size: 16px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+}
 .chat-auto-sources {
     margin: 8px 16px;
     padding: 8px 12px;
@@ -1029,6 +1119,211 @@
     }
 
     // When the user hovers a citation pill, flash the matching source.
+    // On click (plain left-click), open a popover with the article
+    // snippet + state-specific actions instead of navigating away.
+    var citationPopover = null;
+    var citationCache = {};
+
+    function ensurePopover() {
+        if (citationPopover) return citationPopover;
+        var pop = document.createElement('div');
+        pop.className = 'citation-popover';
+        pop.id = 'citation-popover';
+        document.body.appendChild(pop);
+        citationPopover = pop;
+        // Outside click / ESC close.
+        document.addEventListener('click', function(e) {
+            if (!citationPopover.classList.contains('open')) return;
+            if (citationPopover.contains(e.target)) return;
+            if (e.target.closest('.citation-pill')) return;
+            closePopover();
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') closePopover();
+        });
+        return pop;
+    }
+
+    function closePopover() {
+        if (citationPopover) citationPopover.classList.remove('open');
+    }
+
+    function positionPopover(pop, anchor) {
+        var rect = anchor.getBoundingClientRect();
+        var popRect = { w: 340, h: 180 };
+        var left = rect.left;
+        var top = rect.bottom + 6;
+        // Clamp to viewport horizontally.
+        if (left + popRect.w > window.innerWidth - 8) {
+            left = Math.max(8, window.innerWidth - popRect.w - 8);
+        }
+        // Flip above if there's no room below.
+        if (top + popRect.h > window.innerHeight - 8) {
+            top = Math.max(8, rect.top - popRect.h - 6);
+        }
+        pop.style.left = left + 'px';
+        pop.style.top = top + 'px';
+    }
+
+    function fetchArticle(ak, aslug) {
+        var key = ak + '/' + aslug;
+        if (citationCache[key]) return Promise.resolve(citationCache[key]);
+        return fetch('/api/articles/' + encodeURIComponent(ak) + '/' + encodeURIComponent(aslug))
+            .then(function(r) {
+                if (!r.ok) return null;
+                return r.json();
+            })
+            .then(function(j) { citationCache[key] = j; return j; })
+            .catch(function() { return null; });
+    }
+
+    function snippetFromArticle(article) {
+        if (!article) return '';
+        if (article.summary) return article.summary.slice(0, 260);
+        if (article.snippet) return article.snippet.slice(0, 260);
+        // Fall back to HTML: strip tags, grab first 260 chars.
+        var html = article.html || '';
+        var tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        var text = (tmp.textContent || '').replace(/\s+/g, ' ').trim();
+        return text.slice(0, 260);
+    }
+
+    function openPopover(pill) {
+        var pop = ensurePopover();
+        var ak = pill.dataset.kb;
+        var aslug = pill.dataset.slug;
+        var verify = pill.dataset.verify || 'unknown';
+        // Render skeleton immediately so click feels responsive.
+        while (pop.firstChild) pop.removeChild(pop.firstChild);
+        var head = document.createElement('div');
+        head.className = 'citation-popover-head';
+        var title = document.createElement('div');
+        title.className = 'citation-popover-title';
+        title.textContent = 'Loading…';
+        var badge = document.createElement('span');
+        badge.className = 'citation-popover-badge ' + verify;
+        badge.textContent = verify;
+        var closeBtn = document.createElement('button');
+        closeBtn.className = 'citation-popover-close';
+        closeBtn.textContent = '×';
+        closeBtn.setAttribute('aria-label', 'Close');
+        closeBtn.addEventListener('click', closePopover);
+        head.appendChild(title);
+        head.appendChild(badge);
+        head.appendChild(closeBtn);
+        pop.appendChild(head);
+        var slugLine = document.createElement('div');
+        slugLine.className = 'citation-popover-slug';
+        slugLine.textContent = ak + '/' + aslug;
+        pop.appendChild(slugLine);
+        var snippet = document.createElement('div');
+        snippet.className = 'citation-popover-snippet';
+        snippet.textContent = verify === 'broken'
+            ? 'This citation points to an article that does not exist in the KB. The agent may have hallucinated it.'
+            : 'Loading snippet…';
+        pop.appendChild(snippet);
+        var actions = document.createElement('div');
+        actions.className = 'citation-popover-actions';
+        pop.appendChild(actions);
+        positionPopover(pop, pill);
+        pop.classList.add('open');
+        renderPopoverActions(actions, ak, aslug, verify);
+
+        if (verify !== 'broken') {
+            fetchArticle(ak, aslug).then(function(article) {
+                if (!citationPopover.classList.contains('open')) return;
+                if (!article) {
+                    title.textContent = aslug;
+                    snippet.textContent = 'Could not load article.';
+                    return;
+                }
+                title.textContent = article.title || aslug;
+                title.setAttribute('title', article.title || aslug);
+                var text = snippetFromArticle(article);
+                snippet.textContent = text || '(no summary available)';
+            });
+        } else {
+            title.textContent = aslug;
+        }
+    }
+
+    function renderPopoverActions(container, ak, aslug, verify) {
+        while (container.firstChild) container.removeChild(container.firstChild);
+        var openBtn = document.createElement('a');
+        openBtn.className = 'wiki-btn primary';
+        openBtn.href = '/wiki/' + ak + '/' + aslug;
+        openBtn.target = '_blank';
+        openBtn.rel = 'noopener';
+        openBtn.textContent = verify === 'broken' ? 'Try anyway' : 'Open article';
+        container.appendChild(openBtn);
+        if (verify === 'attached') {
+            var rm = document.createElement('button');
+            rm.className = 'wiki-btn danger';
+            rm.textContent = 'Remove from sources';
+            rm.addEventListener('click', function() {
+                rm.disabled = true;
+                rm.textContent = 'removing…';
+                fetch('/api/documents/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/sources/remove', {
+                    method: 'POST',
+                    headers: {'content-type': 'application/json'},
+                    body: JSON.stringify({kb: ak, slug: aslug}),
+                }).then(function(r) {
+                    if (!r.ok) { rm.disabled = false; rm.textContent = 'Remove from sources'; return; }
+                    var row = document.querySelector('[data-source-key="' + ak + '/' + aslug + '"]');
+                    if (row) row.remove();
+                    document.querySelectorAll('.citation-pill[data-kb="' + ak + '"][data-slug="' + aslug + '"]').forEach(function(p) {
+                        p.dataset.verify = 'resolved';
+                        p.setAttribute('title', 'Article exists in the KB but isn\'t attached to this notebook.');
+                    });
+                    closePopover();
+                });
+            });
+            container.appendChild(rm);
+        } else if (verify === 'resolved' || verify === 'unknown') {
+            var add = document.createElement('button');
+            add.className = 'wiki-btn primary';
+            add.textContent = '+ Add to sources';
+            add.addEventListener('click', function() {
+                add.disabled = true;
+                add.textContent = 'adding…';
+                fetchArticle(ak, aslug).then(function(article) {
+                    var title = (article && article.title) || aslug;
+                    return fetch('/api/documents/' + encodeURIComponent(kb) + '/' + encodeURIComponent(slug) + '/sources/add', {
+                        method: 'POST',
+                        headers: {'content-type': 'application/json'},
+                        body: JSON.stringify({kb: ak, slug: aslug, title: title}),
+                    }).then(function(r) {
+                        if (!r.ok) { add.disabled = false; add.textContent = '+ Add to sources'; return; }
+                        appendSourceToRail({kb: ak, slug: aslug, title: title});
+                        document.querySelectorAll('.citation-pill[data-kb="' + ak + '"][data-slug="' + aslug + '"]').forEach(function(p) {
+                            p.dataset.verify = 'attached';
+                            p.setAttribute('title', 'Cited source is attached to this notebook.');
+                        });
+                        closePopover();
+                    });
+                });
+            });
+            container.appendChild(add);
+        } else if (verify === 'broken') {
+            var search = document.createElement('button');
+            search.className = 'wiki-btn';
+            search.textContent = 'Search KB for similar';
+            search.addEventListener('click', function() {
+                closePopover();
+                var addBtn = document.getElementById('add-source-btn');
+                if (addBtn) addBtn.click();
+                var input = document.getElementById('source-search-input');
+                if (input) {
+                    var q = aslug.replace(/-/g, ' ');
+                    input.value = q;
+                    input.dispatchEvent(new Event('input'));
+                }
+            });
+            container.appendChild(search);
+        }
+    }
+
     function wireCitationHovers() {
         document.querySelectorAll('.citation-pill').forEach(function(pill) {
             if (pill.dataset.wired === '1') return;
@@ -1041,6 +1336,12 @@
             pill.addEventListener('mouseleave', function() {
                 var src = document.querySelector('[data-source-key="' + key + '"]');
                 if (src) src.classList.remove('highlighted');
+            });
+            pill.addEventListener('click', function(e) {
+                // Middle / Cmd / Ctrl / Shift: let native link behavior win.
+                if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+                e.preventDefault();
+                openPopover(pill);
             });
         });
     }
