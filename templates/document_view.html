@@ -184,7 +184,81 @@
     cursor: pointer;
 }
 .citation-pill:hover { background: rgba(6,102,204,0.2); }
+/* Grounding-trust badges: attached (cited source is on the rail) is
+   the most trustworthy; resolved means the article exists but isn't
+   attached to this notebook; broken means the slug doesn't exist
+   at all — a likely hallucinated reference. */
+.citation-pill[data-verify="attached"] {
+    background: rgba(40,160,80,0.14);
+    color: #1e7a45 !important;
+    border-color: rgba(40,160,80,0.4);
+}
+.citation-pill[data-verify="attached"]:hover { background: rgba(40,160,80,0.22); }
+.citation-pill[data-verify="attached"]::before { content: '✓ '; }
+.citation-pill[data-verify="resolved"] {
+    background: rgba(200,140,0,0.12);
+    color: #9a6b00 !important;
+    border-color: rgba(200,140,0,0.38);
+}
+.citation-pill[data-verify="resolved"]:hover { background: rgba(200,140,0,0.2); }
+.citation-pill[data-verify="resolved"]::before { content: '• '; }
+.citation-pill[data-verify="broken"] {
+    background: rgba(200,50,50,0.1);
+    color: #b02a2a !important;
+    border-color: rgba(200,50,50,0.35);
+    text-decoration: line-through !important;
+}
+.citation-pill[data-verify="broken"]:hover { background: rgba(200,50,50,0.18); }
+.citation-pill[data-verify="broken"]::before { content: '⚠ '; }
 .source-item.highlighted { background: rgba(6,102,204,0.12) !important; transition: background 0.2s; }
+/* Onboarding progress strip — 3 steps to first value, hides itself
+   when every step is complete. */
+.onboarding-strip {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+    background: linear-gradient(135deg, rgba(6,102,204,0.05), rgba(6,102,204,0.02));
+    border-bottom: 1px solid var(--color-border);
+    font-size: 12px;
+    flex: 0 0 auto;
+    align-items: center;
+}
+.onboarding-step {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    flex: 0 0 auto;
+}
+.onboarding-step.done {
+    background: rgba(40,160,80,0.1);
+    border-color: rgba(40,160,80,0.35);
+    color: #1e7a45;
+}
+.onboarding-step.current {
+    background: rgba(6,102,204,0.1);
+    border-color: rgba(6,102,204,0.4);
+    color: var(--color-accent, #06c);
+    font-weight: 500;
+}
+.onboarding-step-marker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--color-surface-alt);
+    font-size: 11px;
+    font-weight: 600;
+}
+.onboarding-step.done .onboarding-step-marker { background: rgba(40,160,80,0.25); }
+.onboarding-step.current .onboarding-step-marker { background: rgba(6,102,204,0.22); }
+.onboarding-arrow { color: var(--color-text-muted); font-size: 11px; }
 .chat-auto-sources {
     margin: 8px 16px;
     padding: 8px 12px;
@@ -379,6 +453,25 @@
                 </label>
             </span>
         </div>
+        {% if not onboarding.all_done %}
+        {# 3-step progress strip — hidden once all steps complete. #}
+        <div class="onboarding-strip" id="onboarding-strip" aria-label="Getting started">
+            <div class="onboarding-step {% if onboarding.sources_done %}done{% elif not onboarding.sources_done %}current{% endif %}" data-step="sources">
+                <span class="onboarding-step-marker">{% if onboarding.sources_done %}✓{% else %}1{% endif %}</span>
+                <span>Add sources</span>
+            </div>
+            <span class="onboarding-arrow">›</span>
+            <div class="onboarding-step {% if onboarding.chat_done %}done{% elif onboarding.sources_done %}current{% endif %}" data-step="chat">
+                <span class="onboarding-step-marker">{% if onboarding.chat_done %}✓{% else %}2{% endif %}</span>
+                <span>Ask a question</span>
+            </div>
+            <span class="onboarding-arrow">›</span>
+            <div class="onboarding-step {% if onboarding.output_done %}done{% elif onboarding.chat_done %}current{% endif %}" data-step="output">
+                <span class="onboarding-step-marker">{% if onboarding.output_done %}✓{% else %}3{% endif %}</span>
+                <span>Generate output</span>
+            </div>
+        </div>
+        {% endif %}
         <div class="doc-pane-body" id="chat-scroll">
             {% for evt in history if evt.type == 'turn' %}
             <div class="chat-turn {{ evt.role }}">
@@ -901,6 +994,38 @@
         row.appendChild(a);
         row.appendChild(btn);
         list.appendChild(row);
+        markOnboardingStep('sources');
+    }
+
+    // Flip an onboarding step to done and remove the strip if all
+    // three have been completed.
+    function markOnboardingStep(name) {
+        var step = document.querySelector('.onboarding-step[data-step="' + name + '"]');
+        if (step && !step.classList.contains('done')) {
+            step.classList.remove('current');
+            step.classList.add('done');
+            var marker = step.querySelector('.onboarding-step-marker');
+            if (marker) marker.textContent = '✓';
+            // Promote the next undone step to current.
+            var order = ['sources', 'chat', 'output'];
+            var idx = order.indexOf(name);
+            for (var i = idx + 1; i < order.length; i++) {
+                var next = document.querySelector('.onboarding-step[data-step="' + order[i] + '"]');
+                if (next && !next.classList.contains('done')) {
+                    next.classList.add('current');
+                    break;
+                }
+            }
+        }
+        var strip = document.getElementById('onboarding-strip');
+        if (strip && strip.querySelectorAll('.onboarding-step.done').length === 3) {
+            strip.style.transition = 'opacity 0.4s, max-height 0.4s, padding 0.4s';
+            strip.style.opacity = '0';
+            strip.style.maxHeight = '0';
+            strip.style.padding = '0';
+            strip.style.overflow = 'hidden';
+            setTimeout(function() { strip.remove(); }, 450);
+        }
     }
 
     // When the user hovers a citation pill, flash the matching source.
@@ -938,6 +1063,7 @@
         var msg = input.value.trim();
         if (!msg) return;
         appendBubble('user', msg);
+        markOnboardingStep('chat');
         input.value = '';
         sendBtn.disabled = true;
         statusEl.textContent = 'agent thinking...';
@@ -983,6 +1109,7 @@
                     statusEl.textContent = 'v' + Number(data.version_after) + ' is current';
                     var iframe = document.querySelector('#doc-preview iframe');
                     if (iframe) iframe.src = iframe.src.split('?')[0] + '?ts=' + Date.now();
+                    markOnboardingStep('output');
                 }
             }
         } catch (e) {

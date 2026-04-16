@@ -1844,8 +1844,20 @@ async def api_document_chat(request: Request, kb_name: str, slug: str):
     if "error" in result:
         return {"error": result["error"], "ok": False, "auto_added_sources": auto_added}
     # Pre-render the agent response so the UI can drop markdown +
-    # citation pills inline without client-side parsing.
-    rendered = _render_chat_turn(result.get("response") or "")
+    # citation pills inline without client-side parsing. Re-read the
+    # manifest so pills cover any sources auto-added on this turn.
+    from app.documents import get_manifest as _gm
+    _post_manifest = _gm(kb_name, slug) or {}
+    seed_keys = {
+        (s.get("kb") or kb_name, s.get("slug"))
+        for s in (_post_manifest.get("seed_articles") or [])
+        if s.get("slug")
+    }
+    rendered = _render_chat_turn(
+        result.get("response") or "",
+        seed_keys=seed_keys,
+        exists_cache={},
+    )
     return {
         **result,
         "response_html": rendered["content_html"],
@@ -1861,10 +1873,47 @@ _THINK_RE = _re_chat.compile(r"<think>(.*?)</think>", flags=_re_chat.DOTALL | _r
 _REF_RE = _re_chat.compile(r"\[ref:([a-z0-9_\-]+)/([a-z0-9_\-]+)\]", flags=_re_chat.IGNORECASE)
 
 
-def _render_chat_turn(text: str) -> dict:
+def _verify_citation(
+    ref_kb: str, ref_slug: str,
+    seed_keys: set[tuple[str, str]] | None,
+    exists_cache: dict[tuple[str, str], bool] | None,
+) -> str:
+    """Classify a [ref:kb/slug] as attached|resolved|broken|unknown.
+
+    - attached: cited source is on the notebook's source rail (highest trust)
+    - resolved: article exists in the KB but isn't attached to this notebook
+    - broken:   article doesn't exist — likely hallucinated reference
+    - unknown:  verification was skipped (no seed_keys provided)
+    """
+    if seed_keys is None:
+        return "unknown"
+    key = (ref_kb, ref_slug)
+    if key in seed_keys:
+        return "attached"
+    if exists_cache is None:
+        exists_cache = {}
+    hit = exists_cache.get(key)
+    if hit is None:
+        try:
+            hit = storage.exists(ref_kb, f"wiki/{ref_slug}.md")
+        except Exception:
+            hit = False
+        exists_cache[key] = hit
+    return "resolved" if hit else "broken"
+
+
+def _render_chat_turn(
+    text: str,
+    *,
+    seed_keys: set[tuple[str, str]] | None = None,
+    exists_cache: dict[tuple[str, str], bool] | None = None,
+) -> dict:
     """Split <think>…</think> off, render markdown, and rewrite
     [ref:kb/slug] citations into clickable pills. Returns dict with
     ``think_html``, ``content_html``, and ``cited_refs``.
+
+    When ``seed_keys`` is passed, each pill gets a ``data-verify`` attr
+    (attached|resolved|broken) so the UI can surface trust level.
     """
     content = text or ""
     m = _THINK_RE.search(content)
@@ -1874,13 +1923,21 @@ def _render_chat_turn(text: str) -> dict:
         content = _THINK_RE.sub("", content).strip()
 
     cited: list[dict] = []
+    _pill_titles = {
+        "attached": "Cited source is attached to this notebook.",
+        "resolved": "Article exists in the KB but isn't attached to this notebook.",
+        "broken": "Cited article not found — likely hallucinated reference.",
+    }
     def _pill(match):
         ref_kb, ref_slug = match.group(1), match.group(2)
-        cited.append({"kb": ref_kb, "slug": ref_slug})
+        verify = _verify_citation(ref_kb, ref_slug, seed_keys, exists_cache)
+        cited.append({"kb": ref_kb, "slug": ref_slug, "verify": verify})
+        title = _pill_titles.get(verify, f"{ref_kb}/{ref_slug}")
         return (
             f'<a class="citation-pill" href="/wiki/{ref_kb}/{ref_slug}" '
             f'target="_blank" rel="noopener" '
-            f'data-kb="{ref_kb}" data-slug="{ref_slug}">{ref_slug}</a>'
+            f'data-kb="{ref_kb}" data-slug="{ref_slug}" '
+            f'data-verify="{verify}" title="{title}">{ref_slug}</a>'
         )
     # Replace refs BEFORE markdown so fenced code doesn't escape brackets.
     content = _REF_RE.sub(_pill, content)
@@ -1899,18 +1956,38 @@ async def view_document(request: Request, kb_name: str, slug: str):
     if not manifest:
         raise HTTPException(status_code=404, detail="document not found")
     history = get_history(kb_name, slug, limit=50)
+    seed_keys = {
+        (s.get("kb") or kb_name, s.get("slug"))
+        for s in (manifest.get("seed_articles") or [])
+        if s.get("slug")
+    }
+    exists_cache: dict[tuple[str, str], bool] = {}
+    user_turn_seen = False
     for evt in history:
         if evt.get("type") != "turn":
             continue
+        if evt.get("role") == "user":
+            user_turn_seen = True
         if evt.get("role") == "agent":
-            rendered = _render_chat_turn(evt.get("content") or "")
+            rendered = _render_chat_turn(
+                evt.get("content") or "",
+                seed_keys=seed_keys,
+                exists_cache=exists_cache,
+            )
             evt.update(rendered)
         else:
             evt["content_html"] = None  # plain text path in template
+    onboarding = {
+        "sources_done": bool(manifest.get("seed_articles")),
+        "chat_done": user_turn_seen,
+        "output_done": (manifest.get("current_version") or 0) > 0,
+    }
+    onboarding["all_done"] = all(onboarding.values())
     return render(
         "document_view.html",
         kb=kb_name, slug=slug,
         manifest=manifest, history=history,
+        onboarding=onboarding,
     )
 
 
